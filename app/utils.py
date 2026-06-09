@@ -76,13 +76,16 @@ def log_request(log_type, **kwargs):
     except Exception as e:
         current_app.logger.error(f'Failed to log request: {e}')
 
-def check_simulated_error(error_type):
-    error = SimulatedError.query.filter_by(error_type=error_type, enabled=True).first()
-    if error:
-        return {
-            'error': error.error_type,
-            'error_description': error.error_message or f'Simulated {error.error_type} error'
-        }, error.status_code
+def check_simulated_error(error_type, endpoint=None):
+    query = SimulatedError.query.filter_by(error_type=error_type, enabled=True)
+    errors = query.all()
+    
+    for error in errors:
+        if endpoint is None or error.affects_endpoint(endpoint):
+            return {
+                'error': error.error_type,
+                'error_description': error.error_message or f'Simulated {error.error_type} error'
+            }, error.status_code
     return None
 
 def require_basic_auth(f):

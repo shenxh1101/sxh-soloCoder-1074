@@ -34,7 +34,9 @@
         <div class="action-buttons">
             <a href="{{ url_for('admin.tokens') }}" class="btn btn-primary btn-block">管理令牌</a>
             <a href="{{ url_for('admin.simulated_errors') }}" class="btn btn-warning btn-block">管理模拟错误</a>
-            <a href="{{ url_for('api.export_all') }}" class="btn btn-info btn-block">导出全部数据</a>
+            <a href="{{ url_for('admin.playground') }}" class="btn btn-success btn-block">OAuth 流程测试台</a>
+            <a href="{{ url_for('admin.import_page') }}" class="btn btn-info btn-block">导入数据</a>
+            <a href="{{ url_for('api.export_all') }}" class="btn btn-secondary btn-block">导出全部数据</a>
             <a href="{{ url_for('api.export_clients') }}" class="btn btn-secondary btn-block">导出客户端配置</a>
             <a href="{{ url_for('api.export_tokens') }}" class="btn btn-secondary btn-block">导出令牌数据</a>
         </div>

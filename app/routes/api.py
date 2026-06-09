@@ -1,9 +1,8 @@
 import json
-from datetime import datetime
 from flask import Blueprint, request, jsonify, Response
 from app import db
-from app.models import Client, Scope, Token, Log, AuthorizationCode, SimulatedError
-from app.utils import log_request
+from app.models import Client, Scope, Token, Log, AuthorizationCode, SimulatedError, utcnow
+from app.utils import log_request, validate_token
 
 api_bp = Blueprint('api', __name__)
 
@@ -169,7 +168,8 @@ def revoke_token(token_id):
 def export_clients():
     clients = Client.query.all()
     data = {
-        'exported_at': datetime.utcnow().isoformat(),
+        'exported_at': utcnow().isoformat(),
+        'version': '1.0',
         'clients': [c.to_dict(include_secret=True) for c in clients]
     }
     
@@ -203,7 +203,7 @@ def export_all():
     simulated_errors = SimulatedError.query.all()
     
     data = {
-        'exported_at': datetime.utcnow().isoformat(),
+        'exported_at': utcnow().isoformat(),
         'version': '1.0',
         'clients': [c.to_dict(include_secret=True) for c in clients],
         'tokens': [t.to_dict(include_token=True) for t in tokens],
@@ -218,3 +218,224 @@ def export_all():
         mimetype='application/json',
         headers={'Content-Disposition': 'attachment; filename=oauth_server_full_export.json'}
     )
+
+@api_bp.route('/tokens/<int:token_id>', methods=['GET'])
+def get_token_detail(token_id):
+    token = Token.query.get_or_404(token_id)
+    token_dict = token.to_dict(include_token=True)
+    
+    introspect_result = None
+    if token.is_active():
+        validated_token, error = validate_token(token.access_token)
+        if validated_token:
+            introspect_result = validated_token.to_introspect()
+        else:
+            introspect_result = {'active': False, 'error': error}
+    else:
+        introspect_result = {'active': False, 'error': 'Token is revoked or expired'}
+    
+    token_dict['introspect'] = introspect_result
+    return jsonify(token_dict)
+
+@api_bp.route('/import', methods=['POST'])
+def import_data():
+    try:
+        if 'file' in request.files:
+            file = request.files['file']
+            data = json.load(file)
+        else:
+            data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        results = {
+            'clients': {'imported': 0, 'skipped': 0, 'errors': []},
+            'scopes': {'imported': 0, 'skipped': 0, 'errors': []},
+            'tokens': {'imported': 0, 'skipped': 0, 'errors': []},
+            'simulated_errors': {'imported': 0, 'skipped': 0, 'errors': []}
+        }
+        
+        mode = request.args.get('mode', 'skip')
+        
+        if 'clients' in data:
+            for client_data in data['clients']:
+                try:
+                    existing = Client.query.filter_by(client_id=client_data.get('client_id')).first()
+                    if existing:
+                        if mode == 'skip':
+                            results['clients']['skipped'] += 1
+                            results['clients']['errors'].append(
+                                f"Client {client_data.get('client_id')} ({client_data.get('name')}) already exists, skipped"
+                            )
+                            continue
+                        elif mode == 'overwrite':
+                            existing.name = client_data.get('name', existing.name)
+                            existing.description = client_data.get('description', existing.description)
+                            existing.redirect_uris = ','.join(client_data.get('redirect_uris', existing.get_redirect_uris()))
+                            existing.grant_types = ','.join(client_data.get('grant_types', existing.get_grant_types()))
+                            existing.token_format = client_data.get('token_format', existing.token_format)
+                            existing.token_expire_seconds = client_data.get('token_expire_seconds', existing.token_expire_seconds)
+                            existing.require_consent = client_data.get('require_consent', existing.require_consent)
+                            existing.is_active = client_data.get('is_active', existing.is_active)
+                            if 'client_secret' in client_data:
+                                existing.client_secret = client_data['client_secret']
+                            results['clients']['imported'] += 1
+                            continue
+                        else:
+                            results['clients']['errors'].append(
+                                f"Client {client_data.get('client_id')} ({client_data.get('name')}) already exists"
+                            )
+                            continue
+                    
+                    client = Client(
+                        client_id=client_data.get('client_id'),
+                        client_secret=client_data.get('client_secret'),
+                        name=client_data['name'],
+                        description=client_data.get('description', ''),
+                        redirect_uris=','.join(client_data.get('redirect_uris', [])),
+                        grant_types=','.join(client_data.get('grant_types', ['authorization_code', 'client_credentials'])),
+                        token_format=client_data.get('token_format', 'jwt'),
+                        token_expire_seconds=client_data.get('token_expire_seconds', 3600),
+                        require_consent=client_data.get('require_consent', True),
+                        is_active=client_data.get('is_active', True)
+                    )
+                    db.session.add(client)
+                    results['clients']['imported'] += 1
+                except Exception as e:
+                    results['clients']['errors'].append(f"Error importing client {client_data.get('name')}: {str(e)}")
+        
+        db.session.flush()
+        
+        if 'scopes' in data:
+            for scope_data in data['scopes']:
+                try:
+                    existing = Scope.query.filter_by(name=scope_data.get('name')).first()
+                    if existing:
+                        if mode == 'skip':
+                            results['scopes']['skipped'] += 1
+                            continue
+                        elif mode == 'overwrite':
+                            existing.description = scope_data.get('description', existing.description)
+                            existing.is_enabled = scope_data.get('is_enabled', existing.is_enabled)
+                            results['scopes']['imported'] += 1
+                            continue
+                        else:
+                            results['scopes']['errors'].append(f"Scope {scope_data.get('name')} already exists")
+                            continue
+                    
+                    scope = Scope(
+                        name=scope_data['name'],
+                        description=scope_data.get('description', ''),
+                        is_enabled=scope_data.get('is_enabled', True)
+                    )
+                    db.session.add(scope)
+                    results['scopes']['imported'] += 1
+                except Exception as e:
+                    results['scopes']['errors'].append(f"Error importing scope {scope_data.get('name')}: {str(e)}")
+        
+        db.session.flush()
+        
+        if 'tokens' in data:
+            for token_data in data['tokens']:
+                try:
+                    existing = Token.query.filter_by(access_token=token_data.get('access_token')).first()
+                    if existing:
+                        if mode == 'skip':
+                            results['tokens']['skipped'] += 1
+                            continue
+                        elif mode == 'overwrite':
+                            existing.refresh_token = token_data.get('refresh_token', existing.refresh_token)
+                            existing.is_revoked = token_data.get('is_revoked', existing.is_revoked)
+                            results['tokens']['imported'] += 1
+                            continue
+                        else:
+                            results['tokens']['errors'].append(f"Token {token_data.get('id')} already exists")
+                            continue
+                    
+                    from datetime import datetime
+                    expires_at = token_data.get('expires_at')
+                    if isinstance(expires_at, str):
+                        expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00')).replace(tzinfo=None)
+                    
+                    created_at = token_data.get('created_at')
+                    if isinstance(created_at, str):
+                        created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00')).replace(tzinfo=None)
+                    
+                    token = Token(
+                        access_token=token_data['access_token'],
+                        refresh_token=token_data.get('refresh_token'),
+                        client_id=token_data['client_id'],
+                        user_id=token_data.get('user_id'),
+                        token_type=token_data.get('token_type', 'Bearer'),
+                        scope=' '.join(token_data.get('scope', [])) if isinstance(token_data.get('scope'), list) else token_data.get('scope', ''),
+                        expires_at=expires_at,
+                        is_revoked=token_data.get('is_revoked', False),
+                        grant_type=token_data.get('grant_type'),
+                        token_format=token_data.get('token_format', 'jwt'),
+                        created_at=created_at
+                    )
+                    db.session.add(token)
+                    results['tokens']['imported'] += 1
+                except Exception as e:
+                    results['tokens']['errors'].append(f"Error importing token: {str(e)}")
+        
+        db.session.flush()
+        
+        if 'simulated_errors' in data:
+            for error_data in data['simulated_errors']:
+                try:
+                    existing = SimulatedError.query.filter_by(name=error_data.get('name')).first()
+                    if existing:
+                        if mode == 'skip':
+                            results['simulated_errors']['skipped'] += 1
+                            continue
+                        elif mode == 'overwrite':
+                            existing.description = error_data.get('description', existing.description)
+                            existing.error_type = error_data.get('error_type', existing.error_type)
+                            existing.status_code = error_data.get('status_code', existing.status_code)
+                            existing.error_message = error_data.get('error_message', existing.error_message)
+                            existing.enabled = error_data.get('enabled', existing.enabled)
+                            existing.affected_endpoints = ','.join(error_data.get('affected_endpoints', [])) if isinstance(error_data.get('affected_endpoints'), list) else error_data.get('affected_endpoints', '')
+                            results['simulated_errors']['imported'] += 1
+                            continue
+                        else:
+                            results['simulated_errors']['errors'].append(f"Simulated error {error_data.get('name')} already exists")
+                            continue
+                    
+                    error = SimulatedError(
+                        name=error_data['name'],
+                        description=error_data.get('description', ''),
+                        error_type=error_data['error_type'],
+                        status_code=error_data.get('status_code', 400),
+                        error_message=error_data.get('error_message', ''),
+                        enabled=error_data.get('enabled', False),
+                        affected_endpoints=','.join(error_data.get('affected_endpoints', [])) if isinstance(error_data.get('affected_endpoints'), list) else error_data.get('affected_endpoints', '')
+                    )
+                    db.session.add(error)
+                    results['simulated_errors']['imported'] += 1
+                except Exception as e:
+                    results['simulated_errors']['errors'].append(f"Error importing simulated error {error_data.get('name')}: {str(e)}")
+        
+        db.session.commit()
+        
+        log_request(
+            'data_import',
+            success=True,
+            error_message=f"Imported: clients={results['clients']['imported']}, scopes={results['scopes']['imported']}, tokens={results['tokens']['imported']}, errors={results['simulated_errors']['imported']}"
+        )
+        
+        return jsonify({
+            'success': True,
+            'message': 'Import completed',
+            'results': results
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        log_request(
+            'data_import',
+            success=False,
+            error_message=str(e)
+        )
+        return jsonify({'error': f'Import failed: {str(e)}'}), 500

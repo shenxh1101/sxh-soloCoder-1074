@@ -1,0 +1,219 @@
+{% extends 'base.html' %}
+
+{% block title %}数据导入 - OAuth2.0{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>数据导入</h1>
+    <a href="{{ url_for('admin.index') }}" class="btn btn-outline">返回管理面板</a>
+</div>
+
+<div class="grid-2">
+    <div class="card">
+        <div class="section-header">
+            <h2>上传JSON文件</h2>
+        </div>
+        <form id="importForm" enctype="multipart/form-data">
+            <div class="form-group">
+                <label for="file">选择导出的JSON文件</label>
+                <input type="file" id="file" name="file" accept=".json" class="form-control" required>
+                <small class="text-muted">支持导出的完整数据包、客户端、令牌或模拟错误JSON文件</small>
+            </div>
+            
+            <div class="form-group">
+                <label>重复数据处理方式</label>
+                <div class="radio-group">
+                    <label class="radio-item">
+                        <input type="radio" name="mode" value="skip" checked>
+                        <span>跳过重复（保留现有数据）</span>
+                    </label>
+                    <label class="radio-item">
+                        <input type="radio" name="mode" value="overwrite">
+                        <span>覆盖重复（更新现有数据）</span>
+                    </label>
+                </div>
+            </div>
+            
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">
+                    <span id="importBtnText">开始导入</span>
+                </button>
+            </div>
+        </form>
+    </div>
+    
+    <div class="card">
+        <div class="section-header">
+            <h2>导入说明</h2>
+        </div>
+        <div class="info-box">
+            <h4>支持的导入格式</h4>
+            <ul>
+                <li><strong>完整数据包</strong> - 从 <code>/api/export/all</code> 导出的JSON</li>
+                <li><strong>客户端配置</strong> - 从 <code>/api/export/clients</code> 导出的JSON</li>
+                <li><strong>令牌数据</strong> - 从 <code>/api/export/tokens</code> 导出的JSON</li>
+            </ul>
+            
+            <h4>处理方式说明</h4>
+            <ul>
+                <li><strong>跳过重复</strong>：遇到相同 client_id、scope名称或令牌时跳过，保留原有数据</li>
+                <li><strong>覆盖重复</strong>：遇到重复数据时用新数据更新原有记录</li>
+            </ul>
+            
+            <h4>注意事项</h4>
+            <ul>
+                <li>导入前建议先导出当前数据备份</li>
+                <li>令牌导入后状态保持不变（已撤销的仍然撤销）</li>
+                <li>模拟错误导入后默认禁用，需要手动启用</li>
+            </ul>
+        </div>
+    </div>
+</div>
+
+<div id="importResults" class="card" style="display: none; margin-top: 20px;">
+    <div class="section-header">
+        <h2>导入结果</h2>
+    </div>
+    <div id="resultsContent"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('importForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const formData = new FormData(this);
+    const mode = formData.get('mode');
+    const btnText = document.getElementById('importBtnText');
+    const resultsDiv = document.getElementById('importResults');
+    const resultsContent = document.getElementById('resultsContent');
+    
+    btnText.textContent = '导入中...';
+    
+    try {
+        const response = await fetch(`{{ url_for('api.import_data') }}?mode=${mode}`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            let html = '<div class="alert alert-success">导入完成！</div>';
+            html += '<div class="results-grid">';
+            
+            for (const [type, stats] of Object.entries(result.results)) {
+                const typeNames = {
+                    clients: '客户端',
+                    scopes: 'Scope',
+                    tokens: '令牌',
+                    simulated_errors: '模拟错误'
+                };
+                
+                html += `
+                    <div class="result-card">
+                        <h4>${typeNames[type] || type}</h4>
+                        <p><span class="stat-success">✓ 导入: ${stats.imported}</span></p>
+                        <p><span class="stat-warning">⚠ 跳过: ${stats.skipped}</span></p>
+                        ${stats.errors.length > 0 ? `
+                            <p><span class="stat-error">✗ 错误: ${stats.errors.length}</span></p>
+                            <details>
+                                <summary>查看详情</summary>
+                                <ul class="error-list">
+                                    ${stats.errors.map(e => `<li>${e}</li>`).join('')}
+                                </ul>
+                            </details>
+                        ` : ''}
+                    </div>
+                `;
+            }
+            
+            html += '</div>';
+            resultsContent.innerHTML = html;
+            resultsDiv.style.display = 'block';
+            
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+        } else {
+            resultsContent.innerHTML = `<div class="alert alert-danger">导入失败: ${result.error}</div>`;
+            resultsDiv.style.display = 'block';
+        }
+    } catch (error) {
+        resultsContent.innerHTML = `<div class="alert alert-danger">请求失败: ${error.message}</div>`;
+        resultsDiv.style.display = 'block';
+    } finally {
+        btnText.textContent = '开始导入';
+    }
+});
+</script>
+<style>
+.results-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+    margin-top: 15px;
+}
+
+.result-card {
+    padding: 15px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border-left: 4px solid #007bff;
+}
+
+.result-card h4 {
+    margin: 0 0 10px 0;
+    color: #333;
+}
+
+.stat-success { color: #28a745; font-weight: bold; }
+.stat-warning { color: #ffc107; font-weight: bold; }
+.stat-error { color: #dc3545; font-weight: bold; }
+
+.error-list {
+    margin: 10px 0 0 0;
+    padding-left: 20px;
+    color: #dc3545;
+    font-size: 0.9em;
+}
+
+.radio-group {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.radio-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.info-box {
+    background: #f8f9fa;
+    padding: 20px;
+    border-radius: 8px;
+}
+
+.info-box h4 {
+    margin-top: 15px;
+    margin-bottom: 8px;
+}
+
+.info-box h4:first-child {
+    margin-top: 0;
+}
+
+.info-box ul {
+    margin: 0;
+    padding-left: 20px;
+}
+
+.info-box li {
+    margin-bottom: 5px;
+}
+</style>
+{% endblock %}

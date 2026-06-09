@@ -1,0 +1,508 @@
+{% extends 'base.html' %}
+
+{% block title %}OAuth 流程测试台 - OAuth2.0{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>OAuth 流程测试台</h1>
+    <a href="{{ url_for('admin.index') }}" class="btn btn-outline">返回管理面板</a>
+</div>
+
+<div class="grid-2">
+    <div class="card">
+        <div class="section-header">
+            <h2>配置</h2>
+        </div>
+        
+        <div class="form-group">
+            <label for="grantType">授权类型</label>
+            <select id="grantType" class="form-control" onchange="updateForm()">
+                <option value="client_credentials">客户端凭证模式 (Client Credentials)</option>
+                <option value="authorization_code">授权码模式 (Authorization Code)</option>
+            </select>
+        </div>
+        
+        <div class="form-group">
+            <label for="clientId">客户端 *</label>
+            <select id="clientId" class="form-control" onchange="updateClientSecret()">
+                <option value="">-- 选择客户端 --</option>
+                {% for client in clients %}
+                    <option value="{{ client.client_id }}" 
+                            data-secret="{{ client.client_secret }}"
+                            data-redirect="{{ client.get_redirect_uris()[0] if client.get_redirect_uris() else '' }}">
+                        {{ client.name }}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+        
+        <div class="form-group">
+            <label for="clientSecret">客户端密钥 *</label>
+            <div class="input-group">
+                <input type="text" id="clientSecret" class="form-control" placeholder="选择客户端后自动填充">
+                <button type="button" class="btn btn-secondary" onclick="copyToClipboard('clientSecret')">复制</button>
+            </div>
+        </div>
+        
+        <div id="authCodeFields" style="display: none;">
+            <div class="form-group">
+                <label for="redirectUri">重定向 URI *</label>
+                <input type="text" id="redirectUri" class="form-control" placeholder="http://localhost:3000/callback">
+            </div>
+            
+            <div class="form-group">
+                <label for="userId">模拟用户ID</label>
+                <input type="text" id="userId" class="form-control" value="test_user" placeholder="任意用户名">
+            </div>
+        </div>
+        
+        <div class="form-group">
+            <label for="scope">授权范围 (Scope)</label>
+            <div class="scope-checkboxes">
+                {% for scope in scopes %}
+                    <label class="checkbox-item inline">
+                        <input type="checkbox" name="scope" value="{{ scope.name }}">
+                        <span>{{ scope.name }}</span>
+                        <small class="text-muted">({{ scope.description }})</small>
+                    </label>
+                {% endfor %}
+            </div>
+        </div>
+        
+        <div class="form-group">
+            <label for="tokenFormat">令牌格式</label>
+            <select id="tokenFormat" class="form-control">
+                <option value="jwt">JWT (JSON Web Token)</option>
+                <option value="random">随机字符串</option>
+            </select>
+        </div>
+        
+        <button type="button" class="btn btn-primary btn-block btn-lg" onclick="runFlow()" id="runBtn">
+            ▶ 开始测试
+        </button>
+    </div>
+    
+    <div class="card">
+        <div class="section-header">
+            <h2>执行结果</h2>
+            <div id="flowStatus" class="tag tag-secondary">等待执行</div>
+        </div>
+        
+        <div id="flowSteps" class="flow-steps">
+            <div class="empty-state">
+                <p>配置参数后点击"开始测试"运行OAuth流程</p>
+                <p class="text-muted">每一步的请求和响应都会展示在这里，方便复制到你的应用中调试</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="tokenResult" class="card" style="display: none; margin-top: 20px;">
+    <div class="section-header">
+        <h2>令牌信息</h2>
+    </div>
+    <div id="tokenInfo"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const clients = {{ clients|tojson|safe }};
+const clientMap = {};
+clients.forEach(c => clientMap[c.client_id] = c);
+
+function updateForm() {
+    const grantType = document.getElementById('grantType').value;
+    const authCodeFields = document.getElementById('authCodeFields');
+    
+    if (grantType === 'authorization_code') {
+        authCodeFields.style.display = 'block';
+    } else {
+        authCodeFields.style.display = 'none';
+    }
+}
+
+function updateClientSecret() {
+    const select = document.getElementById('clientId');
+    const option = select.options[select.selectedIndex];
+    if (option) {
+        document.getElementById('clientSecret').value = option.dataset.secret || '';
+        document.getElementById('redirectUri').value = option.dataset.redirect || '';
+    }
+}
+
+function getSelectedScopes() {
+    const checkboxes = document.querySelectorAll('input[name="scope"]:checked');
+    return Array.from(checkboxes).map(cb => cb.value).join(' ');
+}
+
+function copyToClipboard(elementId) {
+    const el = document.getElementById(elementId);
+    el.select();
+    document.execCommand('copy');
+    showToast('已复制到剪贴板');
+}
+
+function showToast(message) {
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.textContent = message;
+    toast.style.cssText = 'position: fixed; top: 20px; right: 20px; background: #333; color: white; padding: 10px 20px; border-radius: 4px; z-index: 9999;';
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 2000);
+}
+
+async function runFlow() {
+    const grantType = document.getElementById('grantType').value;
+    const clientId = document.getElementById('clientId').value;
+    const clientSecret = document.getElementById('clientSecret').value;
+    const scope = getSelectedScopes();
+    const tokenFormat = document.getElementById('tokenFormat').value;
+    const redirectUri = document.getElementById('redirectUri').value;
+    const userId = document.getElementById('userId').value;
+    const runBtn = document.getElementById('runBtn');
+    const flowStatus = document.getElementById('flowStatus');
+    const flowSteps = document.getElementById('flowSteps');
+    const tokenResult = document.getElementById('tokenResult');
+    const tokenInfo = document.getElementById('tokenInfo');
+    
+    if (!clientId || !clientSecret) {
+        showToast('请选择客户端');
+        return;
+    }
+    
+    if (grantType === 'authorization_code' && !redirectUri) {
+        showToast('请填写重定向URI');
+        return;
+    }
+    
+    runBtn.disabled = true;
+    runBtn.innerHTML = '⏳ 执行中...';
+    flowStatus.className = 'tag tag-warning';
+    flowStatus.textContent = '执行中...';
+    flowSteps.innerHTML = '';
+    tokenResult.style.display = 'none';
+    
+    const payload = {
+        client_id: clientId,
+        client_secret: clientSecret,
+        scope: scope,
+        token_format: tokenFormat
+    };
+    
+    if (grantType === 'authorization_code') {
+        payload.redirect_uri = redirectUri;
+        payload.user_id = userId;
+    }
+    
+    try {
+        const endpoint = grantType === 'client_credentials' 
+            ? '{{ url_for('admin.run_client_credentials') }}' 
+            : '{{ url_for('admin.run_authorization_code') }}';
+            
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            flowStatus.className = 'tag tag-success';
+            flowStatus.textContent = '执行成功';
+            
+            result.steps.forEach((step, index) => {
+                const stepEl = document.createElement('div');
+                stepEl.className = `step-card ${step.status}`;
+                
+                let stepHtml = `
+                    <div class="step-header">
+                        <span class="step-number">${index + 1}</span>
+                        <span class="step-name">${step.name}</span>
+                        <span class="tag tag-${step.status === 'success' ? 'success' : 'danger'}">
+                            ${step.status === 'success' ? '✓ 成功' : '✗ 失败'}
+                        </span>
+                    </div>
+                `;
+                
+                if (step.request) {
+                    stepHtml += `
+                        <div class="step-section">
+                            <div class="section-title">
+                                <span>Request</span>
+                                <button class="btn btn-xs btn-secondary" onclick="copyText(this.parentElement.nextElementSibling.textContent)">复制</button>
+                            </div>
+                            <pre class="code-block"><code>${escapeHtml(step.request)}</code></pre>
+                        </div>
+                    `;
+                }
+                
+                if (step.response) {
+                    stepHtml += `
+                        <div class="step-section">
+                            <div class="section-title">
+                                <span>Response</span>
+                                <span class="status-badge status-${step.status_code >= 200 && step.status_code < 300 ? 'success' : step.status_code >= 400 ? 'error' : 'warning'}">
+                                    ${step.status_code}
+                                </span>
+                                <button class="btn btn-xs btn-secondary" onclick="copyText(this.parentElement.nextElementSibling.textContent)">复制</button>
+                            </div>
+                            <pre class="code-block"><code>${escapeHtml(step.response)}</code></pre>
+                        </div>
+                    `;
+                }
+                
+                stepEl.innerHTML = stepHtml;
+                flowSteps.appendChild(stepEl);
+                
+                if (index < result.steps.length - 1) {
+                    const arrow = document.createElement('div');
+                    arrow.className = 'step-arrow';
+                    arrow.innerHTML = '↓';
+                    flowSteps.appendChild(arrow);
+                }
+            });
+            
+            tokenResult.style.display = 'block';
+            let tokenHtml = '<div class="token-grid">';
+            
+            if (result.authorization_code) {
+                tokenHtml += `
+                    <div class="token-item">
+                        <label>授权码 (Authorization Code)</label>
+                        <div class="input-group">
+                            <input type="text" value="${result.authorization_code}" readonly class="form-control">
+                            <button class="btn btn-secondary" onclick="copyToClipboardValue('${result.authorization_code}')">复制</button>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            tokenHtml += `
+                <div class="token-item">
+                    <label>访问令牌 (Access Token)</label>
+                    <div class="input-group">
+                        <textarea readonly class="form-control" rows="3">${result.access_token}</textarea>
+                        <button class="btn btn-secondary" onclick="copyToClipboardValue('${result.access_token}')">复制</button>
+                    </div>
+                </div>
+            `;
+            
+            if (result.refresh_token) {
+                tokenHtml += `
+                    <div class="token-item">
+                        <label>刷新令牌 (Refresh Token)</label>
+                        <div class="input-group">
+                            <input type="text" value="${result.refresh_token}" readonly class="form-control">
+                            <button class="btn btn-secondary" onclick="copyToClipboardValue('${result.refresh_token}')">复制</button>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            tokenHtml += `
+                <div class="token-item">
+                    <label>令牌类型</label>
+                    <p><code>${result.token_type}</code></p>
+                </div>
+                <div class="token-item">
+                    <label>过期时间</label>
+                    <p><code>${result.expires_in}</code> 秒</p>
+                </div>
+            `;
+            
+            tokenHtml += '</div>';
+            tokenInfo.innerHTML = tokenHtml;
+            
+        } else {
+            flowStatus.className = 'tag tag-danger';
+            flowStatus.textContent = '执行失败';
+            
+            result.steps.forEach(step => {
+                const stepEl = document.createElement('div');
+                stepEl.className = `step-card ${step.status}`;
+                stepEl.innerHTML = `
+                    <div class="step-header">
+                        <span class="step-name">${step.name}</span>
+                        <span class="tag tag-danger">✗ 失败</span>
+                    </div>
+                    <div class="step-section">
+                        <div class="section-title"><span>Request</span></div>
+                        <pre class="code-block"><code>${escapeHtml(step.request)}</code></pre>
+                    </div>
+                    <div class="step-section">
+                        <div class="section-title">
+                            <span>Response</span>
+                            <span class="status-badge status-error">${step.status_code}</span>
+                        </div>
+                        <pre class="code-block"><code>${escapeHtml(step.response)}</code></pre>
+                    </div>
+                `;
+                flowSteps.appendChild(stepEl);
+            });
+        }
+        
+    } catch (error) {
+        flowStatus.className = 'tag tag-danger';
+        flowStatus.textContent = '请求失败';
+        flowSteps.innerHTML = `<div class="alert alert-danger">错误: ${error.message}</div>`;
+    } finally {
+        runBtn.disabled = false;
+        runBtn.innerHTML = '▶ 开始测试';
+    }
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function copyText(text) {
+    navigator.clipboard.writeText(text);
+    showToast('已复制到剪贴板');
+}
+
+function copyToClipboardValue(value) {
+    navigator.clipboard.writeText(value);
+    showToast('已复制到剪贴板');
+}
+</script>
+<style>
+.flow-steps {
+    max-height: 600px;
+    overflow-y: auto;
+    padding-right: 10px;
+}
+
+.step-card {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 10px;
+}
+
+.step-card.success {
+    border-left: 4px solid #28a745;
+}
+
+.step-card.error {
+    border-left: 4px solid #dc3545;
+}
+
+.step-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #eee;
+}
+
+.step-number {
+    background: #007bff;
+    color: white;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+.step-name {
+    flex: 1;
+    font-weight: 600;
+}
+
+.step-arrow {
+    text-align: center;
+    color: #6c757d;
+    font-size: 20px;
+    margin: 5px 0;
+}
+
+.step-section {
+    margin-top: 10px;
+}
+
+.section-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 5px;
+    font-size: 0.9em;
+    color: #6c757d;
+    text-transform: uppercase;
+    font-weight: 600;
+}
+
+.section-title button {
+    margin-left: auto;
+}
+
+.status-badge {
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+.status-success { background: #d4edda; color: #155724; }
+.status-error { background: #f8d7da; color: #721c24; }
+.status-warning { background: #fff3cd; color: #856404; }
+
+.scope-checkboxes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 15px;
+}
+
+.checkbox-item.inline {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-bottom: 0;
+}
+
+.token-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+}
+
+.token-item label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 5px;
+    color: #495057;
+}
+
+.input-group {
+    display: flex;
+    gap: 5px;
+}
+
+.input-group .form-control {
+    flex: 1;
+}
+
+.btn-xs {
+    padding: 2px 8px;
+    font-size: 11px;
+}
+
+.toast {
+    animation: slideIn 0.3s ease;
+}
+
+@keyframes slideIn {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+</style>
+{% endblock %}

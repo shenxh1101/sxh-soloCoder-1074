@@ -50,15 +50,27 @@
                    placeholder="例如：令牌已过期">
         </div>
         
-        {% if error %}
+        <div class="form-group">
+            <label>影响端点（不选则影响所有端点）</label>
+            <div class="checkbox-group">
+                {% for value, label in endpoint_options %}
+                    <label class="checkbox-item">
+                        <input type="checkbox" name="affected_endpoints" value="{{ value }}"
+                               {{ 'checked' if error and value in error.get_affected_endpoints() else '' }}>
+                        <span>{{ label }}</span>
+                    </label>
+                {% endfor %}
+            </div>
+            <small class="text-muted">选择此错误模拟应该在哪些端点生效。不选则在所有相关端点生效。</small>
+        </div>
+        
         <div class="form-group">
             <label class="checkbox-item">
                 <input type="checkbox" name="enabled" value="1"
-                       {{ 'checked' if error.enabled else '' }}>
-                <span>立即启用此错误</span>
+                       {{ 'checked' if error and error.enabled else '' }}>
+                <span>{{ '保存后立即启用此错误' if error else '创建后立即启用此错误' }}</span>
             </label>
         </div>
-        {% endif %}
         
         <div class="form-actions">
             <button type="submit" class="btn btn-primary">

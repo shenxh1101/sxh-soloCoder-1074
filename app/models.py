@@ -212,6 +212,16 @@ class SimulatedError(db.Model):
     error_type = db.Column(db.String(50), nullable=False)
     status_code = db.Column(db.Integer, default=401)
     error_message = db.Column(db.String(500))
+    affected_endpoints = db.Column(db.String(255), default='')
+    
+    def get_affected_endpoints(self):
+        return [e.strip() for e in (self.affected_endpoints or '').split(',') if e.strip()]
+    
+    def affects_endpoint(self, endpoint):
+        endpoints = self.get_affected_endpoints()
+        if not endpoints:
+            return True
+        return endpoint in endpoints
     
     def to_dict(self):
         return {
@@ -221,5 +231,6 @@ class SimulatedError(db.Model):
             'enabled': self.enabled,
             'error_type': self.error_type,
             'status_code': self.status_code,
-            'error_message': self.error_message
+            'error_message': self.error_message,
+            'affected_endpoints': self.get_affected_endpoints()
         }

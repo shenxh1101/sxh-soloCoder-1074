@@ -37,6 +37,18 @@
                     <span class="tag tag-danger">{{ error.error_type }}</span>
                     <span class="tag tag-info">{{ error.status_code }}</span>
                 </div>
+                {% if error.get_affected_endpoints() %}
+                    <div class="error-endpoints">
+                        <small class="text-muted">影响端点: </small>
+                        {% for ep in error.get_affected_endpoints() %}
+                            <span class="tag tag-secondary">{{ ep }}</span>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <div class="error-endpoints">
+                        <small class="text-muted">影响端点: <span class="tag tag-warning">所有端点</span></small>
+                    </div>
+                {% endif %}
                 {% if error.error_message %}
                     <p class="error-message">{{ error.error_message }}</p>
                 {% endif %}

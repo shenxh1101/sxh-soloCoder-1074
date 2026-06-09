@@ -102,9 +102,9 @@
     </div>
     
     <div class="stats-summary">
-        <p>共 {{ tokens|length }} 个令牌，其中活跃 {{ tokens|selectattr('is_active')|list|length }} 个，
-           已撤销 {{ tokens|selectattr('is_revoked')|list|length }} 个，
-           已过期 {{ tokens|rejectattr('is_revoked')|selectattr('is_expired')|list|length }} 个</p>
+        <p>共 {{ tokens|length }} 个令牌，其中活跃 {{ active_count }} 个，
+           已撤销 {{ revoked_count }} 个，
+           已过期 {{ expired_count }} 个</p>
     </div>
 {% else %}
     <div class="empty-state">
@@ -128,65 +128,151 @@
 {% block scripts %}
 <script>
 function showTokenDetails(id) {
-    fetch(`/api/tokens`)
+    const detailsDiv = document.getElementById('tokenDetails');
+    detailsDiv.innerHTML = '<p class="text-muted">加载中...</p>';
+    document.getElementById('tokenModal').style.display = 'block';
+    
+    fetch(`/api/tokens/${id}`)
         .then(r => r.json())
-        .then(tokens => {
-            const token = tokens.find(t => t.id === id);
-            if (token) {
-                let html = `
-                    <div class="info-group">
-                        <label>Access Token</label>
-                        <div class="code-block">${token.access_token || 'N/A'}</div>
+        .then(token => {
+            let scopeDisplay = Array.isArray(token.scope) ? token.scope.join(', ') : (token.scope || 'N/A');
+            
+            let html = `
+                <div class="info-group">
+                    <label>Access Token</label>
+                    <div class="code-block with-copy">
+                        <code>${escapeHtml(token.access_token || 'N/A')}</code>
+                        <button class="copy-btn" onclick="copyText('${escapeHtml(token.access_token || '')}')">复制</button>
                     </div>
-                    <div class="info-group">
-                        <label>Refresh Token</label>
-                        <div class="code-block">${token.refresh_token || 'N/A'}</div>
+                </div>
+                <div class="info-group">
+                    <label>Refresh Token</label>
+                    <div class="code-block with-copy">
+                        <code>${escapeHtml(token.refresh_token || 'N/A')}</code>
+                        <button class="copy-btn" onclick="copyText('${escapeHtml(token.refresh_token || '')}')">复制</button>
                     </div>
+                </div>
+                <div class="info-group">
+                    <label>客户端ID</label>
+                    <div class="code-block">${token.client_id}</div>
+                </div>
+                <div class="info-group">
+                    <label>用户ID</label>
+                    <p>${token.user_id || 'N/A'}</p>
+                </div>
+                <div class="info-group">
+                    <label>授权类型</label>
+                    <p><span class="tag tag-info">${token.grant_type}</span></p>
+                </div>
+                <div class="info-group">
+                    <label>令牌格式</label>
+                    <p><span class="tag tag-primary">${token.token_format}</span></p>
+                </div>
+                <div class="info-group">
+                    <label>Scope</label>
+                    <p>${scopeDisplay}</p>
+                </div>
+                <div class="info-group">
+                    <label>状态</label>
+                    <p>
+                        ${token.is_revoked ? '<span class="tag tag-danger">已撤销</span>' :
+                          token.is_active ? '<span class="tag tag-success">活跃</span>' :
+                          '<span class="tag tag-warning">已过期</span>'}
+                    </p>
+                </div>
+                <div class="info-group">
+                    <label>创建时间</label>
+                    <p>${formatDate(token.created_at)}</p>
+                </div>
+                <div class="info-group">
+                    <label>过期时间</label>
+                    <p>${formatDate(token.expires_at)}</p>
+                </div>
+            `;
+            
+            if (token.introspect) {
+                html += `
                     <div class="info-group">
-                        <label>客户端ID</label>
-                        <div class="code-block">${token.client_id}</div>
-                    </div>
-                    <div class="info-group">
-                        <label>用户ID</label>
-                        <p>${token.user_id || 'N/A'}</p>
-                    </div>
-                    <div class="info-group">
-                        <label>授权类型</label>
-                        <p>${token.grant_type}</p>
-                    </div>
-                    <div class="info-group">
-                        <label>令牌格式</label>
-                        <p>${token.token_format}</p>
-                    </div>
-                    <div class="info-group">
-                        <label>Scope</label>
-                        <p>${token.scope.join(', ') || 'N/A'}</p>
-                    </div>
-                    <div class="info-group">
-                        <label>状态</label>
-                        <p>
-                            ${token.is_revoked ? '<span class="tag tag-danger">已撤销</span>' :
-                              token.is_active ? '<span class="tag tag-success">活跃</span>' :
-                              '<span class="tag tag-warning">已过期</span>'}
-                        </p>
-                    </div>
-                    <div class="info-group">
-                        <label>创建时间</label>
-                        <p>${token.created_at}</p>
-                    </div>
-                    <div class="info-group">
-                        <label>过期时间</label>
-                        <p>${token.expires_at}</p>
+                        <label>Introspect 结果</label>
+                        <div class="code-block with-copy">
+                            <code>${escapeHtml(JSON.stringify(token.introspect, null, 2))}</code>
+                            <button class="copy-btn" onclick="copyText('${escapeHtml(JSON.stringify(token.introspect, null, 2))}')">复制</button>
+                        </div>
                     </div>
                 `;
-                document.getElementById('tokenDetails').innerHTML = html;
-                document.getElementById('tokenModal').style.display = 'block';
             }
+            
+            detailsDiv.innerHTML = html;
+        })
+        .catch(error => {
+            detailsDiv.innerHTML = `<div class="alert alert-danger">加载失败: ${error.message}</div>`;
         });
 }
 
 function closeModal() {
     document.getElementById('tokenModal').style.display = 'none';
 }
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function formatDate(dateStr) {
+    if (!dateStr) return 'N/A';
+    try {
+        const date = new Date(dateStr);
+        return date.toLocaleString('zh-CN');
+    } catch (e) {
+        return dateStr;
+    }
+}
+
+function copyText(text) {
+    navigator.clipboard.writeText(text);
+    showToast('已复制到剪贴板');
+}
+
+function showToast(message) {
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.textContent = message;
+    toast.style.cssText = 'position: fixed; top: 20px; right: 20px; background: #333; color: white; padding: 10px 20px; border-radius: 4px; z-index: 9999;';
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 2000);
+}
 </script>
+<style>
+.code-block.with-copy {
+    position: relative;
+    padding-right: 80px;
+}
+
+.copy-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    padding: 4px 12px;
+    font-size: 12px;
+    background: #6c757d;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.copy-btn:hover {
+    background: #5a6268;
+}
+
+.toast {
+    animation: slideIn 0.3s ease;
+}
+
+@keyframes slideIn {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+</style>
 {% endblock %}

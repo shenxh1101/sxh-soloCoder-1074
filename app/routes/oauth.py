@@ -10,7 +10,7 @@ oauth_bp = Blueprint('oauth', __name__)
 
 @oauth_bp.route('/authorize', methods=['GET'])
 def authorize():
-    sim_error = check_simulated_error('invalid_request')
+    sim_error = check_simulated_error('invalid_request', 'authorize')
     if sim_error:
         log_request('authorize_error', success=False, error_message=sim_error[0]['error_description'])
         return jsonify(sim_error[0]), sim_error[1]
@@ -68,7 +68,7 @@ def authorize():
             user_id=user_id
         )
     
-    sim_error = check_simulated_error('access_denied')
+    sim_error = check_simulated_error('access_denied', 'authorize')
     if sim_error:
         log_request('authorize_error', client_id=client_id, user_id=user_id, success=False, error_message=sim_error[0]['error_description'])
         return redirect_with_error(redirect_uri, 'access_denied', sim_error[0]['error_description'], state)
@@ -127,7 +127,7 @@ def authorize_post():
 @oauth_bp.route('/token', methods=['POST'])
 @require_basic_auth
 def token():
-    sim_error = check_simulated_error('invalid_client')
+    sim_error = check_simulated_error('invalid_client', 'token')
     if sim_error:
         log_request('token_error', client_id=request.client.client_id, success=False, error_message=sim_error[0]['error_description'])
         return jsonify(sim_error[0]), sim_error[1]
@@ -154,7 +154,7 @@ def token():
                 'error_description': f'Invalid scope: {", ".join(invalid_scopes)}'
             }), 400
         
-        sim_error = check_simulated_error('invalid_grant')
+        sim_error = check_simulated_error('invalid_grant', 'token')
         if sim_error:
             log_request('token_error', client_id=client.client_id, grant_type=grant_type, success=False, error_message=sim_error[0]['error_description'])
             return jsonify(sim_error[0]), sim_error[1]
@@ -203,7 +203,7 @@ def token():
                 'error_description': 'Authorization code has expired'
             }), 400
         
-        sim_error = check_simulated_error('invalid_grant')
+        sim_error = check_simulated_error('invalid_grant', 'token')
         if sim_error:
             log_request('token_error', client_id=client.client_id, grant_type=grant_type, success=False, error_message=sim_error[0]['error_description'])
             return jsonify(sim_error[0]), sim_error[1]
@@ -273,7 +273,7 @@ def token():
 @oauth_bp.route('/introspect', methods=['POST'])
 @require_basic_auth
 def introspect():
-    sim_error = check_simulated_error('invalid_token')
+    sim_error = check_simulated_error('invalid_token', 'introspect')
     if sim_error:
         log_request('introspect_error', client_id=request.client.client_id, success=False, error_message=sim_error[0]['error_description'])
         return jsonify({'active': False}), 200
