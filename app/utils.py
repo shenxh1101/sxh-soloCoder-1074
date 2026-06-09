@@ -91,6 +91,11 @@ def check_simulated_error(error_type, endpoint=None):
                     if not client_id and request.authorization:
                         client_id = request.authorization.username
                 
+                response_body = {
+                    'error': error.error_type,
+                    'error_description': error.error_message or f'Simulated {error.error_type} error'
+                }
+                
                 error_hit = ErrorHit(
                     simulated_error_id=error.id,
                     endpoint=endpoint or 'unknown',
@@ -98,6 +103,7 @@ def check_simulated_error(error_type, endpoint=None):
                     error_type=error.error_type,
                     status_code=error.status_code,
                     error_message=error.error_message,
+                    response_body=json.dumps(response_body),
                     request_path=request.path,
                     ip_address=request.remote_addr,
                     user_agent=request.user_agent.string[:500] if request.user_agent and request.user_agent.string else None

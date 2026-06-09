@@ -277,6 +277,7 @@ class ErrorHit(db.Model):
     error_type = db.Column(db.String(50), nullable=False)
     status_code = db.Column(db.Integer, nullable=False)
     error_message = db.Column(db.String(500))
+    response_body = db.Column(db.Text)
     request_path = db.Column(db.String(500))
     ip_address = db.Column(db.String(45))
     user_agent = db.Column(db.String(500))
@@ -296,6 +297,7 @@ class ErrorHit(db.Model):
             'error_type': self.error_type,
             'status_code': self.status_code,
             'error_message': self.error_message,
+            'response_body': self.response_body,
             'request_path': self.request_path,
             'ip_address': self.ip_address,
             'user_agent': self.user_agent,

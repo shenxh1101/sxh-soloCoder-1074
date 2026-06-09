@@ -92,6 +92,7 @@
                     <th>客户端</th>
                     <th>IP地址</th>
                     <th>请求路径</th>
+                    <th>错误响应</th>
                 </tr>
             </thead>
             <tbody>
@@ -124,6 +125,16 @@
                     </td>
                     <td><code>{{ hit.ip_address }}</code></td>
                     <td><small>{{ hit.request_path }}</small></td>
+                    <td>
+                        {% if hit.response_body %}
+                        <details>
+                            <summary>查看响应</summary>
+                            <pre style="max-width: 300px; overflow-x: auto; margin-top: 5px; padding: 8px; background: #f5f5f5; border-radius: 4px; font-size: 11px;">{{ hit.response_body }}</pre>
+                        </details>
+                        {% else %}
+                        <span class="text-muted">-</span>
+                        {% endif %}
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>

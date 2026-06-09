@@ -414,9 +414,12 @@ def preview_import():
                             for c in data.get('clients', [])
                         )
                         if not client_in_import:
-                            preview['warnings'].append(
-                                f'Token[{idx}] references a non-existent client_id: {token_data["client_id"]}, will not be able to link to client after import'
-                            )
+                            item['action'] = 'error'
+                            item['reason'] = f'Token references a non-existent client_id: {token_data["client_id"]}, which does not exist in existing clients or the import list'
+                            preview['summary']['tokens']['error'] += 1
+                            preview['can_import'] = False
+                            preview['details']['tokens'].append(item)
+                            continue
                     
                     existing = existing_tokens.get(token_data['access_token'])
                     if existing:
@@ -495,72 +498,56 @@ def import_data():
     confirm = request.args.get('confirm', 'false').lower() == 'true'
     preview_id = request.args.get('preview_id')
     
-    if not confirm:
-        return jsonify({
-            'success': False,
-            'error': 'Import not confirmed',
-            'error_description': 'Please preview and confirm the import first'
-        }), 400
+    import_history = ImportHistory(
+        import_mode=mode,
+        status='pending',
+        source='pending',
+        results='{}'
+    )
+    db.session.add(import_history)
+    db.session.flush()
     
-    import_history = None
     try:
+        if not confirm:
+            raise Exception('Import not confirmed: Please preview and confirm the import first')
+        
+        import_history.source = filename or 'direct_input'
+        db.session.flush()
+        
         if preview_id and 'import_preview' in session and session['import_preview']['id'] == preview_id:
             preview_data = session['import_preview']
             data = preview_data['data']
             mode = preview_data['mode']
             filename = preview_data['filename']
+            import_history.source = filename or 'direct_input'
+            import_history.import_mode = mode
+            db.session.flush()
             del session['import_preview']
         else:
             if 'file' in request.files:
                 file = request.files['file']
                 if not file or file.filename == '':
-                    return jsonify({
-                        'success': False,
-                        'error': 'No file uploaded',
-                        'error_description': 'Please select the JSON file to import'
-                    }), 400
+                    raise Exception('No file uploaded: Please select the JSON file to import')
                 
                 filename = file.filename
+                import_history.source = filename
+                db.session.flush()
+                
                 content = file.read()
                 if not content or len(content.strip()) == 0:
-                    return jsonify({
-                        'success': False,
-                        'error': 'Empty file',
-                        'error_description': 'The uploaded file is empty, please check the file content'
-                    }), 400
+                    raise Exception('Empty file: The uploaded file is empty, please check the file content')
                 
                 try:
                     data = json.loads(content.decode('utf-8'))
                 except json.JSONDecodeError as e:
-                    return jsonify({
-                        'success': False,
-                        'error': 'Invalid JSON format',
-                        'error_description': f'JSON format error: {str(e)}, please check if the file content is valid JSON format'
-                    }), 400
+                    raise Exception(f'Invalid JSON format: JSON format error: {str(e)}, please check if the file content is valid JSON format')
             else:
                 data = request.get_json()
                 if not data:
-                    return jsonify({
-                        'success': False,
-                        'error': 'No data provided',
-                        'error_description': 'Please provide the JSON data to import'
-                    }), 400
+                    raise Exception('No data provided: Please provide the JSON data to import')
             
             if not isinstance(data, dict):
-                return jsonify({
-                    'success': False,
-                    'error': 'Invalid data format',
-                    'error_description': 'The imported data must be a JSON object format'
-                }), 400
-        
-        import_history = ImportHistory(
-            import_mode=mode,
-            status='pending',
-            source=filename or 'direct_input',
-            results='{}'
-        )
-        db.session.add(import_history)
-        db.session.flush()
+                raise Exception('Invalid data format: The imported data must be a JSON object format')
         
         results = {
             'clients': {'imported': 0, 'skipped': 0, 'errors': [], 'details': []},
@@ -673,8 +660,21 @@ def import_data():
             raise Exception(f"Import failed, found {len(results['scopes']['errors'])} errors, all changes have been rolled back")
         
         if 'tokens' in data:
+            existing_clients = {c.client_id: c for c in Client.query.all()}
+            import_client_ids = {c.get('client_id') for c in data.get('clients', [])}
+            
             for token_data in data['tokens']:
                 try:
+                    token_client_id = token_data.get('client_id')
+                    if token_client_id not in existing_clients and token_client_id not in import_client_ids:
+                        error_msg = f"Token references non-existent client_id: {token_client_id}, which does not exist in existing clients or the import list"
+                        if atomic:
+                            raise Exception(error_msg)
+                        else:
+                            results['tokens']['errors'].append(error_msg)
+                            has_errors = True
+                            continue
+                    
                     existing = Token.query.filter_by(access_token=token_data.get('access_token')).first()
                     if existing:
                         if mode == 'skip':

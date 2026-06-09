@@ -277,78 +277,211 @@ def playground():
 
 @admin_bp.route('/playground/run-client-credentials', methods=['POST'])
 def run_client_credentials():
+    from flask import current_app
+    
     data = request.get_json()
     client_id = data.get('client_id')
     client_secret = data.get('client_secret')
     scope = data.get('scope', '')
     token_format = data.get('token_format', 'jwt')
+    simulated_error_id = data.get('simulated_error_id')
     
     steps = []
+    restored = False
     
-    client = Client.query.filter_by(
-        client_id=client_id,
-        client_secret=client_secret,
-        is_active=True
-    ).first()
-    
-    if not client:
-        steps.append({
-            'name': 'Client Authentication',
-            'status': 'error',
-            'request': f'POST /oauth/token\nAuthorization: Basic {base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()}\nContent-Type: application/x-www-form-urlencoded\n\ngrant_type=client_credentials&scope={scope}',
-            'response': 'HTTP/1.1 401 Unauthorized\n\n{"error": "invalid_client", "error_description": "Invalid client credentials"}',
-            'status_code': 401
+    try:
+        if simulated_error_id:
+            apply_resp = apply_error_config_internal(simulated_error_id)
+            if not apply_resp[0].get('success'):
+                steps.append({
+                    'name': 'Error',
+                    'status': 'error',
+                    'request': f'套用错误配置 #{simulated_error_id}',
+                    'response': apply_resp[0].get('error_description', '未知错误'),
+                    'status_code': 500
+                })
+                return jsonify({'success': False, 'steps': steps})
+        
+        client = Client.query.filter_by(
+            client_id=client_id,
+            client_secret=client_secret,
+            is_active=True
+        ).first()
+        
+        if not client:
+            steps.append({
+                'name': 'Client Authentication',
+                'status': 'error',
+                'request': f'POST /oauth/token\nAuthorization: Basic {base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()}\nContent-Type: application/x-www-form-urlencoded\n\ngrant_type=client_credentials&scope={scope}',
+                'response': 'HTTP/1.1 401 Unauthorized\n\n{"error": "invalid_client", "error_description": "Invalid client credentials"}',
+                'status_code': 401
+            })
+            return jsonify({'success': False, 'steps': steps})
+        
+        if token_format != client.token_format:
+            client.token_format = token_format
+            db.session.commit()
+        
+        auth_header = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+        
+        token_request_data = urllib.parse.urlencode({
+            'grant_type': 'client_credentials',
+            'scope': scope
         })
-        return jsonify({'success': False, 'steps': steps})
-    
-    if token_format != client.token_format:
-        client.token_format = token_format
+        token_request_headers = {
+            'Authorization': f'Basic {auth_header}',
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
+        token_request_str = f'POST /oauth/token\nAuthorization: Basic {auth_header}\nContent-Type: application/x-www-form-urlencoded\n\n{token_request_data}'
+        
+        steps.append({
+            'name': '1. Get Token (Client Credentials)',
+            'status': 'pending',
+            'request': token_request_str,
+            'response': None,
+            'status_code': None
+        })
+        
+        with current_app.test_client() as client_http:
+            token_resp = client_http.post(
+                '/oauth/token',
+                data=token_request_data,
+                headers=token_request_headers
+            )
+            
+            token_status = token_resp.status_code
+            token_response_data = token_resp.get_json() if token_resp.data else {}
+            token_response_str = f'HTTP/1.1 {token_status} {"OK" if token_status == 200 else "Error"}\nContent-Type: application/json\n\n{json.dumps(token_response_data, indent=2)}'
+            
+            steps[-1]['response'] = token_response_str
+            steps[-1]['status_code'] = token_status
+            steps[-1]['status'] = 'success' if token_status == 200 else 'error'
+            
+            if token_status != 200:
+                return jsonify({
+                    'success': False,
+                    'steps': steps,
+                    'error': token_response_data.get('error'),
+                    'error_description': token_response_data.get('error_description')
+                })
+            
+            access_token = token_response_data.get('access_token')
+            
+            intro_request_data = urllib.parse.urlencode({'token': access_token})
+            intro_request_str = f'POST /oauth/introspect\nAuthorization: Basic {auth_header}\nContent-Type: application/x-www-form-urlencoded\n\n{intro_request_data}'
+            
+            steps.append({
+                'name': '2. Token Introspection',
+                'status': 'pending',
+                'request': intro_request_str,
+                'response': None,
+                'status_code': None
+            })
+            
+            intro_resp = client_http.post(
+                '/oauth/introspect',
+                data=intro_request_data,
+                headers={
+                    'Authorization': f'Basic {auth_header}',
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                }
+            )
+            
+            intro_status = intro_resp.status_code
+            intro_response_data = intro_resp.get_json() if intro_resp.data else {}
+            intro_response_str = f'HTTP/1.1 {intro_status} {"OK" if intro_status == 200 else "Error"}\nContent-Type: application/json\n\n{json.dumps(intro_response_data, indent=2)}'
+            
+            steps[-1]['response'] = intro_response_str
+            steps[-1]['status_code'] = intro_status
+            steps[-1]['status'] = 'success' if intro_status == 200 else 'error'
+            
+            if intro_status != 200:
+                return jsonify({
+                    'success': False,
+                    'steps': steps,
+                    'error': intro_response_data.get('error'),
+                    'error_description': intro_response_data.get('error_description')
+                })
+            
+            return jsonify({
+                'success': True,
+                'steps': steps,
+                'access_token': access_token,
+                'refresh_token': token_response_data.get('refresh_token'),
+                'token_type': token_response_data.get('token_type'),
+                'expires_in': token_response_data.get('expires_in'),
+                'introspect_result': intro_response_data
+            })
+            
+    finally:
+        if simulated_error_id and not restored:
+            restore_error_configs_internal()
+            restored = True
+
+
+def apply_error_config_internal(error_id):
+    try:
+        error = SimulatedError.query.get_or_404(error_id)
+        
+        if 'temp_error_states' not in session:
+            session['temp_error_states'] = {}
+        
+        if str(error_id) not in session['temp_error_states']:
+            session['temp_error_states'][str(error_id)] = {
+                'enabled': error.enabled,
+                'affected_endpoints': error.affected_endpoints
+            }
+            session.modified = True
+        
+        error.enabled = True
         db.session.commit()
-    
-    auth_header = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
-    
-    steps.append({
-        'name': '1. Client Authentication',
-        'status': 'success',
-        'request': f'POST /oauth/token\nAuthorization: Basic {auth_header}\nContent-Type: application/x-www-form-urlencoded\n\ngrant_type=client_credentials&scope={scope}',
-        'response': None,
-        'status_code': None
-    })
-    
-    from datetime import timedelta
-    token_data = create_token(client, None, scope, 'client_credentials')
-    
-    steps[-1]['response'] = f'HTTP/1.1 200 OK\nContent-Type: application/json\n\n{json.dumps(token_data, indent=2)}'
-    steps[-1]['status_code'] = 200
-    
-    steps.append({
-        'name': '2. Token Introspection',
-        'status': 'success',
-        'request': f'POST /oauth/introspect\nAuthorization: Basic {auth_header}\nContent-Type: application/x-www-form-urlencoded\n\ntoken={token_data["access_token"]}',
-        'response': None,
-        'status_code': None
-    })
-    
-    validated_token, error = validate_token(token_data['access_token'])
-    if validated_token:
-        intro_result = validated_token.to_introspect()
-    else:
-        intro_result = {'active': False, 'error': error}
-    
-    steps[-1]['response'] = f'HTTP/1.1 200 OK\nContent-Type: application/json\n\n{json.dumps(intro_result, indent=2)}'
-    steps[-1]['status_code'] = 200
-    
-    return jsonify({
-        'success': True,
-        'steps': steps,
-        'access_token': token_data['access_token'],
-        'refresh_token': token_data.get('refresh_token'),
-        'token_type': token_data['token_type'],
-        'expires_in': token_data['expires_in']
-    })
+        
+        return {'success': True, 'message': f'已启用错误配置: {error.name}'}, 200
+    except Exception as e:
+        db.session.rollback()
+        return {'success': False, 'error': 'Failed to apply error config', 'error_description': str(e)}, 500
+
+
+def restore_error_configs_internal():
+    try:
+        restored_count = 0
+        if 'temp_error_states' in session:
+            for error_id_str, state in session['temp_error_states'].items():
+                try:
+                    error_id = int(error_id_str)
+                    error = SimulatedError.query.get(error_id)
+                    if error:
+                        error.enabled = state['enabled']
+                        error.affected_endpoints = state['affected_endpoints']
+                        restored_count += 1
+                except Exception as e:
+                    current_app.logger.error(f'Failed to restore error {error_id_str}: {e}')
+            
+            db.session.commit()
+            del session['temp_error_states']
+            session.modified = True
+        
+        return {'success': True, 'message': f'已恢复 {restored_count} 个错误配置'}, 200
+    except Exception as e:
+        db.session.rollback()
+        return {'success': False, 'error': 'Failed to restore error configs', 'error_description': str(e)}, 500
+
+
+@admin_bp.route('/playground/apply-error/<int:error_id>', methods=['POST'])
+def apply_error_config(error_id):
+    result, status = apply_error_config_internal(error_id)
+    return jsonify(result), status
+
+
+@admin_bp.route('/playground/restore-errors', methods=['POST'])
+def restore_error_configs():
+    result, status = restore_error_configs_internal()
+    return jsonify(result), status
 
 @admin_bp.route('/playground/run-authorization-code', methods=['POST'])
 def run_authorization_code():
+    from flask import current_app
+    
     data = request.get_json()
     client_id = data.get('client_id')
     client_secret = data.get('client_secret')
@@ -356,108 +489,179 @@ def run_authorization_code():
     scope = data.get('scope', '')
     user_id = data.get('user_id', 'test_user')
     token_format = data.get('token_format', 'jwt')
+    simulated_error_id = data.get('simulated_error_id')
     
     steps = []
+    restored = False
     
-    client = Client.query.filter_by(
-        client_id=client_id,
-        client_secret=client_secret,
-        is_active=True
-    ).first()
-    
-    if not client:
+    try:
+        if simulated_error_id:
+            apply_resp = apply_error_config_internal(simulated_error_id)
+            if not apply_resp[0].get('success'):
+                steps.append({
+                    'name': 'Error',
+                    'status': 'error',
+                    'request': f'套用错误配置 #{simulated_error_id}',
+                    'response': apply_resp[0].get('error_description', '未知错误'),
+                    'status_code': 500
+                })
+                return jsonify({'success': False, 'steps': steps})
+        
+        client = Client.query.filter_by(
+            client_id=client_id,
+            client_secret=client_secret,
+            is_active=True
+        ).first()
+        
+        if not client:
+            steps.append({
+                'name': 'Client Authentication',
+                'status': 'error',
+                'request': f'GET /oauth/authorize?client_id={client_id}&response_type=code&redirect_uri={redirect_uri}&scope={scope}',
+                'response': 'HTTP/1.1 400 Bad Request\n\n{"error": "invalid_client", "error_description": "Unknown client"}',
+                'status_code': 401
+            })
+            return jsonify({'success': False, 'steps': steps})
+        
+        if token_format != client.token_format:
+            client.token_format = token_format
+            db.session.commit()
+        
+        auth_header = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+        
         steps.append({
-            'name': 'Client Authentication',
-            'status': 'error',
-            'request': f'GET /oauth/authorize?client_id={client_id}&response_type=code&redirect_uri={redirect_uri}&scope={scope}',
-            'response': 'HTTP/1.1 400 Bad Request\n\n{"error": "invalid_client", "error_description": "Unknown client"}',
-            'status_code': 401
+            'name': '1. Authorization Request',
+            'status': 'success',
+            'request': f'GET /oauth/authorize\n\n?client_id={client_id}\n&response_type=code\n&redirect_uri={urllib.parse.quote(redirect_uri)}\n&scope={urllib.parse.quote(scope)}',
+            'response': f'HTTP/1.1 302 Found\nLocation: /login?next=%2Foauth%2Fauthorize%3Fclient_id%3D{client_id}%26response_type%3Dcode%26redirect_uri%3D{urllib.parse.quote(redirect_uri)}%26scope%3D{urllib.parse.quote(scope)}',
+            'status_code': 302
         })
-        return jsonify({'success': False, 'steps': steps})
-    
-    if token_format != client.token_format:
-        client.token_format = token_format
+        
+        steps.append({
+            'name': '2. User Login & Consent',
+            'status': 'success',
+            'request': f'POST /login\n\nusername={user_id}&password=any_password',
+            'response': f'HTTP/1.1 302 Found\nLocation: /oauth/authorize?client_id={client_id}&response_type=code&redirect_uri={urllib.parse.quote(redirect_uri)}&scope={urllib.parse.quote(scope)}&consent_given=1',
+            'status_code': 302
+        })
+        
+        from datetime import timedelta, timezone
+        auth_code = AuthorizationCode(
+            client_id=client.client_id,
+            user_id=user_id,
+            redirect_uri=redirect_uri,
+            scope=scope,
+            expires_at=utcnow() + timedelta(seconds=60)
+        )
+        db.session.add(auth_code)
         db.session.commit()
-    
-    auth_header = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
-    
-    steps.append({
-        'name': '1. Authorization Request',
-        'status': 'success',
-        'request': f'GET /oauth/authorize\n\n?client_id={client_id}\n&response_type=code\n&redirect_uri={urllib.parse.quote(redirect_uri)}\n&scope={urllib.parse.quote(scope)}',
-        'response': f'HTTP/1.1 302 Found\nLocation: /login?next=%2Foauth%2Fauthorize%3Fclient_id%3D{client_id}%26response_type%3Dcode%26redirect_uri%3D{urllib.parse.quote(redirect_uri)}%26scope%3D{urllib.parse.quote(scope)}',
-        'status_code': 302
-    })
-    
-    steps.append({
-        'name': '2. User Login & Consent',
-        'status': 'success',
-        'request': f'POST /login\n\nusername={user_id}&password=any_password',
-        'response': f'HTTP/1.1 302 Found\nLocation: /oauth/authorize?client_id={client_id}&response_type=code&redirect_uri={urllib.parse.quote(redirect_uri)}&scope={urllib.parse.quote(scope)}&consent_given=1',
-        'status_code': 302
-    })
-    
-    from datetime import timedelta, timezone
-    auth_code = AuthorizationCode(
-        client_id=client.client_id,
-        user_id=user_id,
-        redirect_uri=redirect_uri,
-        scope=scope,
-        expires_at=utcnow() + timedelta(seconds=60)
-    )
-    db.session.add(auth_code)
-    db.session.commit()
-    
-    steps.append({
-        'name': '3. Authorization Code Redirect',
-        'status': 'success',
-        'request': None,
-        'response': f'HTTP/1.1 302 Found\nLocation: {redirect_uri}?code={auth_code.code}',
-        'status_code': 302,
-        'code': auth_code.code
-    })
-    
-    steps.append({
-        'name': '4. Token Exchange',
-        'status': 'success',
-        'request': f'POST /oauth/token\nAuthorization: Basic {auth_header}\nContent-Type: application/x-www-form-urlencoded\n\ngrant_type=authorization_code&code={auth_code.code}&redirect_uri={urllib.parse.quote(redirect_uri)}',
-        'response': None,
-        'status_code': None
-    })
-    
-    token_data = create_token(client, user_id, scope, 'authorization_code')
-    auth_code.is_used = True
-    db.session.commit()
-    
-    steps[-1]['response'] = f'HTTP/1.1 200 OK\nContent-Type: application/json\n\n{json.dumps(token_data, indent=2)}'
-    steps[-1]['status_code'] = 200
-    
-    steps.append({
-        'name': '5. Token Introspection',
-        'status': 'success',
-        'request': f'POST /oauth/introspect\nAuthorization: Basic {auth_header}\nContent-Type: application/x-www-form-urlencoded\n\ntoken={token_data["access_token"]}',
-        'response': None,
-        'status_code': None
-    })
-    
-    validated_token, error = validate_token(token_data['access_token'])
-    if validated_token:
-        intro_result = validated_token.to_introspect()
-    else:
-        intro_result = {'active': False, 'error': error}
-    
-    steps[-1]['response'] = f'HTTP/1.1 200 OK\nContent-Type: application/json\n\n{json.dumps(intro_result, indent=2)}'
-    steps[-1]['status_code'] = 200
-    
-    return jsonify({
-        'success': True,
-        'steps': steps,
-        'authorization_code': auth_code.code,
-        'access_token': token_data['access_token'],
-        'refresh_token': token_data.get('refresh_token'),
-        'token_type': token_data['token_type'],
-        'expires_in': token_data['expires_in']
-    })
+        
+        steps.append({
+            'name': '3. Authorization Code Redirect',
+            'status': 'success',
+            'request': None,
+            'response': f'HTTP/1.1 302 Found\nLocation: {redirect_uri}?code={auth_code.code}',
+            'status_code': 302,
+            'code': auth_code.code
+        })
+        
+        token_request_data = urllib.parse.urlencode({
+            'grant_type': 'authorization_code',
+            'code': auth_code.code,
+            'redirect_uri': redirect_uri
+        })
+        token_request_str = f'POST /oauth/token\nAuthorization: Basic {auth_header}\nContent-Type: application/x-www-form-urlencoded\n\n{token_request_data}'
+        
+        steps.append({
+            'name': '4. Token Exchange',
+            'status': 'pending',
+            'request': token_request_str,
+            'response': None,
+            'status_code': None
+        })
+        
+        with current_app.test_client() as client_http:
+            token_resp = client_http.post(
+                '/oauth/token',
+                data=token_request_data,
+                headers={
+                    'Authorization': f'Basic {auth_header}',
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                }
+            )
+            
+            token_status = token_resp.status_code
+            token_response_data = token_resp.get_json() if token_resp.data else {}
+            token_response_str = f'HTTP/1.1 {token_status} {"OK" if token_status == 200 else "Error"}\nContent-Type: application/json\n\n{json.dumps(token_response_data, indent=2)}'
+            
+            steps[-1]['response'] = token_response_str
+            steps[-1]['status_code'] = token_status
+            steps[-1]['status'] = 'success' if token_status == 200 else 'error'
+            
+            if token_status != 200:
+                return jsonify({
+                    'success': False,
+                    'steps': steps,
+                    'authorization_code': auth_code.code,
+                    'error': token_response_data.get('error'),
+                    'error_description': token_response_data.get('error_description')
+                })
+            
+            access_token = token_response_data.get('access_token')
+            
+            intro_request_data = urllib.parse.urlencode({'token': access_token})
+            intro_request_str = f'POST /oauth/introspect\nAuthorization: Basic {auth_header}\nContent-Type: application/x-www-form-urlencoded\n\n{intro_request_data}'
+            
+            steps.append({
+                'name': '5. Token Introspection',
+                'status': 'pending',
+                'request': intro_request_str,
+                'response': None,
+                'status_code': None
+            })
+            
+            intro_resp = client_http.post(
+                '/oauth/introspect',
+                data=intro_request_data,
+                headers={
+                    'Authorization': f'Basic {auth_header}',
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                }
+            )
+            
+            intro_status = intro_resp.status_code
+            intro_response_data = intro_resp.get_json() if intro_resp.data else {}
+            intro_response_str = f'HTTP/1.1 {intro_status} {"OK" if intro_status == 200 else "Error"}\nContent-Type: application/json\n\n{json.dumps(intro_response_data, indent=2)}'
+            
+            steps[-1]['response'] = intro_response_str
+            steps[-1]['status_code'] = intro_status
+            steps[-1]['status'] = 'success' if intro_status == 200 else 'error'
+            
+            if intro_status != 200:
+                return jsonify({
+                    'success': False,
+                    'steps': steps,
+                    'authorization_code': auth_code.code,
+                    'access_token': access_token,
+                    'error': intro_response_data.get('error'),
+                    'error_description': intro_response_data.get('error_description')
+                })
+            
+            return jsonify({
+                'success': True,
+                'steps': steps,
+                'authorization_code': auth_code.code,
+                'access_token': access_token,
+                'refresh_token': token_response_data.get('refresh_token'),
+                'token_type': token_response_data.get('token_type'),
+                'expires_in': token_response_data.get('expires_in'),
+                'introspect_result': intro_response_data
+            })
+            
+    finally:
+        if simulated_error_id and not restored:
+            restore_error_configs_internal()
+            restored = True
 
 @admin_bp.route('/import/history', methods=['GET'])
 def import_history():
@@ -542,83 +746,4 @@ def error_hits():
             error=str(e)
         )
 
-@admin_bp.route('/playground/apply-error/<int:error_id>', methods=['POST'])
-def apply_error_config(error_id):
-    try:
-        error = SimulatedError.query.get_or_404(error_id)
-        
-        if 'temp_error_states' not in session:
-            session['temp_error_states'] = {}
-        
-        if error_id not in session['temp_error_states']:
-            session['temp_error_states'][str(error_id)] = {
-                'enabled': error.enabled,
-                'affected_endpoints': error.affected_endpoints
-            }
-        
-        error.enabled = True
-        db.session.commit()
-        session.modified = True
-        
-        log_request(
-            'admin_apply_error',
-            success=True,
-            error_message=f'Applied error config: {error.name}'
-        )
-        
-        return jsonify({
-            'success': True,
-            'message': f'已启用错误配置: {error.name}',
-            'error_id': error_id,
-            'error_name': error.name
-        })
-    except Exception as e:
-        db.session.rollback()
-        current_app = __import__('flask').current_app
-        current_app.logger.error(f'Apply error config error: {e}')
-        return jsonify({
-            'success': False,
-            'error': 'Failed to apply error config',
-            'error_description': str(e)
-        }), 500
 
-@admin_bp.route('/playground/restore-errors', methods=['POST'])
-def restore_error_configs():
-    try:
-        restored_count = 0
-        if 'temp_error_states' in session:
-            for error_id_str, state in session['temp_error_states'].items():
-                try:
-                    error_id = int(error_id_str)
-                    error = SimulatedError.query.get(error_id)
-                    if error:
-                        error.enabled = state['enabled']
-                        error.affected_endpoints = state['affected_endpoints']
-                        restored_count += 1
-                except Exception as e:
-                    current_app = __import__('flask').current_app
-                    current_app.logger.error(f'Failed to restore error {error_id_str}: {e}')
-            
-            db.session.commit()
-            del session['temp_error_states']
-        
-        log_request(
-            'admin_restore_errors',
-            success=True,
-            error_message=f'Restored {restored_count} error configs'
-        )
-        
-        return jsonify({
-            'success': True,
-            'message': f'已恢复 {restored_count} 个错误配置',
-            'restored_count': restored_count
-        })
-    except Exception as e:
-        db.session.rollback()
-        current_app = __import__('flask').current_app
-        current_app.logger.error(f'Restore error configs error: {e}')
-        return jsonify({
-            'success': False,
-            'error': 'Failed to restore error configs',
-            'error_description': str(e)
-        }), 500
