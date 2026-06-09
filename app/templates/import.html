@@ -5,7 +5,10 @@
 {% block content %}
 <div class="page-header">
     <h1>数据导入</h1>
-    <a href="{{ url_for('admin.index') }}" class="btn btn-outline">返回管理面板</a>
+    <div>
+        <a href="{{ url_for('admin.import_history') }}" class="btn btn-outline">查看导入历史</a>
+        <a href="{{ url_for('admin.index') }}" class="btn btn-outline">返回管理面板</a>
+    </div>
 </div>
 
 <div class="grid-2">
@@ -34,9 +37,16 @@
                 </div>
             </div>
             
+            <div class="form-group">
+                <label class="checkbox-item">
+                    <input type="checkbox" id="atomic" name="atomic" checked>
+                    <span>事务模式（有错误时回滚所有更改）</span>
+                </label>
+            </div>
+            
             <div class="form-actions">
-                <button type="submit" class="btn btn-primary">
-                    <span id="importBtnText">开始导入</span>
+                <button type="submit" class="btn btn-primary" id="previewBtn">
+                    <span id="previewBtnText">预检数据</span>
                 </button>
             </div>
         </form>
@@ -70,6 +80,22 @@
     </div>
 </div>
 
+<div id="previewSection" class="card" style="display: none; margin-top: 20px;">
+    <div class="section-header">
+        <h2>预检结果</h2>
+        <div>
+            <span id="previewStatus" class="tag tag-secondary">准备中...</span>
+        </div>
+    </div>
+    <div id="previewContent"></div>
+    <div id="importActions" class="form-actions" style="display: none; margin-top: 20px;">
+        <button type="button" class="btn btn-secondary" onclick="cancelImport()">取消</button>
+        <button type="button" class="btn btn-primary" onclick="confirmImport()" id="confirmBtn">
+            <span id="confirmBtnText">确认导入</span>
+        </button>
+    </div>
+</div>
+
 <div id="importResults" class="card" style="display: none; margin-top: 20px;">
     <div class="section-header">
         <h2>导入结果</h2>
@@ -80,19 +106,33 @@
 
 {% block scripts %}
 <script>
+let currentPreviewId = null;
+let currentMode = null;
+
 document.getElementById('importForm').addEventListener('submit', async function(e) {
     e.preventDefault();
     
     const formData = new FormData(this);
     const mode = formData.get('mode');
-    const btnText = document.getElementById('importBtnText');
-    const resultsDiv = document.getElementById('importResults');
-    const resultsContent = document.getElementById('resultsContent');
+    const atomic = document.getElementById('atomic').checked;
+    const previewBtn = document.getElementById('previewBtn');
+    const previewBtnText = document.getElementById('previewBtnText');
+    const previewSection = document.getElementById('previewSection');
+    const previewContent = document.getElementById('previewContent');
+    const previewStatus = document.getElementById('previewStatus');
+    const importActions = document.getElementById('importActions');
     
-    btnText.textContent = '导入中...';
+    currentMode = mode;
+    previewBtn.disabled = true;
+    previewBtnText.textContent = '预检中...';
+    previewSection.style.display = 'block';
+    importActions.style.display = 'none';
+    previewStatus.className = 'tag tag-warning';
+    previewStatus.textContent = '正在分析数据...';
+    previewContent.innerHTML = '<div class="loading">正在分析导入数据，请稍候...</div>';
     
     try {
-        const response = await fetch(`{{ url_for('api.import_data') }}?mode=${mode}`, {
+        const response = await fetch(`{{ url_for('api.preview_import') }}?mode=${mode}`, {
             method: 'POST',
             body: formData
         });
@@ -100,7 +140,162 @@ document.getElementById('importForm').addEventListener('submit', async function(
         const result = await response.json();
         
         if (result.success) {
+            currentPreviewId = result.preview_id;
+            previewStatus.className = result.preview.can_import ? 'tag tag-success' : 'tag tag-danger';
+            previewStatus.textContent = result.preview.can_import ? '可以导入' : '存在错误，无法导入';
+            
+            let html = renderPreviewSummary(result.preview.summary);
+            html += renderPreviewDetails(result.preview.details);
+            
+            if (result.preview.warnings && result.preview.warnings.length > 0) {
+                html += '<div class="warnings-section">';
+                html += '<h4>⚠️ 警告</h4>';
+                html += '<ul class="warning-list">';
+                result.preview.warnings.forEach(w => {
+                    html += `<li>${w}</li>`;
+                });
+                html += '</ul></div>';
+            }
+            
+            previewContent.innerHTML = html;
+            
+            if (result.preview.can_import) {
+                importActions.style.display = 'flex';
+                document.getElementById('confirmBtn').disabled = false;
+            }
+        } else {
+            previewStatus.className = 'tag tag-danger';
+            previewStatus.textContent = '预检失败';
+            previewContent.innerHTML = `<div class="alert alert-danger">预检失败: ${result.error_description || result.error}</div>`;
+        }
+    } catch (error) {
+        previewStatus.className = 'tag tag-danger';
+        previewStatus.textContent = '请求失败';
+        previewContent.innerHTML = `<div class="alert alert-danger">请求失败: ${error.message}</div>`;
+    } finally {
+        previewBtn.disabled = false;
+        previewBtnText.textContent = '重新预检';
+    }
+});
+
+function renderPreviewSummary(summary) {
+    const typeNames = {
+        clients: '客户端',
+        scopes: 'Scope',
+        tokens: '令牌',
+        simulated_errors: '模拟错误'
+    };
+    
+    let html = '<div class="preview-summary">';
+    html += '<h4>数据概览</h4>';
+    html += '<div class="summary-grid">';
+    
+    for (const [type, stats] of Object.entries(summary)) {
+        const total = stats.new + stats.overwrite + stats.skip + stats.error;
+        if (total === 0) continue;
+        
+        html += `
+            <div class="summary-card">
+                <h5>${typeNames[type] || type}</h5>
+                <div class="summary-stats">
+                    <span class="stat-new">新增: ${stats.new}</span>
+                    <span class="stat-overwrite">覆盖: ${stats.overwrite}</span>
+                    <span class="stat-skip">跳过: ${stats.skip}</span>
+                    ${stats.error > 0 ? `<span class="stat-error">错误: ${stats.error}</span>` : ''}
+                </div>
+            </div>
+        `;
+    }
+    
+    html += '</div></div>';
+    return html;
+}
+
+function renderPreviewDetails(details) {
+    const typeNames = {
+        clients: '客户端',
+        scopes: 'Scope',
+        tokens: '令牌',
+        simulated_errors: '模拟错误'
+    };
+    
+    let html = '<div class="preview-details">';
+    html += '<h4>详细信息</h4>';
+    
+    for (const [type, items] of Object.entries(details)) {
+        if (items.length === 0) continue;
+        
+        html += `
+            <div class="detail-section">
+                <h5>${typeNames[type] || type} (${items.length} 项)</h5>
+                <div class="detail-list">
+        `;
+        
+        items.forEach((item, idx) => {
+            const actionClass = {
+                'new': 'action-new',
+                'overwrite': 'action-overwrite',
+                'skip': 'action-skip',
+                'error': 'action-error'
+            }[item.action] || '';
+            
+            const actionText = {
+                'new': '新增',
+                'overwrite': '覆盖',
+                'skip': '跳过',
+                'error': '错误'
+            }[item.action] || item.action;
+            
+            const itemName = item.data.name || item.data.client_id || `项目 ${idx + 1}`;
+            
+            html += `
+                <div class="detail-item ${actionClass}">
+                    <span class="action-badge">${actionText}</span>
+                    <span class="item-name">${itemName}</span>
+                    ${item.reason ? `<span class="item-reason">${item.reason}</span>` : ''}
+                </div>
+            `;
+        });
+        
+        html += '</div></div>';
+    }
+    
+    html += '</div>';
+    return html;
+}
+
+async function confirmImport() {
+    if (!currentPreviewId) {
+        showToast('请先进行预检');
+        return;
+    }
+    
+    const atomic = document.getElementById('atomic').checked;
+    const confirmBtn = document.getElementById('confirmBtn');
+    const confirmBtnText = document.getElementById('confirmBtnText');
+    const resultsDiv = document.getElementById('importResults');
+    const resultsContent = document.getElementById('resultsContent');
+    
+    confirmBtn.disabled = true;
+    confirmBtnText.textContent = '导入中...';
+    
+    try {
+        const response = await fetch(`{{ url_for('api.import_data') }}?preview_id=${currentPreviewId}&confirm=true&atomic=${atomic}`, {
+            method: 'POST'
+        });
+        
+        const result = await response.json();
+        resultsDiv.style.display = 'block';
+        
+        if (result.success) {
             let html = '<div class="alert alert-success">导入完成！</div>';
+            
+            if (result.import_id) {
+                html += `<div class="import-id">导入记录ID: <strong>#${result.import_id}</strong> `;
+                html += `<a href="{{ url_for('admin.import_history') }}" class="btn btn-xs btn-primary" style="margin-left: 10px;">查看历史</a> `;
+                html += `<a href="{{ url_for('api.download_import_report', import_id=0) }}".replace('/0', '/${result.import_id}') class="btn btn-xs btn-secondary">下载报告</a></div>`;
+            }
+            
             html += '<div class="results-grid">';
             
             for (const [type, stats] of Object.entries(result.results)) {
@@ -131,22 +326,37 @@ document.getElementById('importForm').addEventListener('submit', async function(
             
             html += '</div>';
             resultsContent.innerHTML = html;
-            resultsDiv.style.display = 'block';
             
             setTimeout(() => {
-                window.location.reload();
-            }, 2000);
+                window.location.href = "{{ url_for('admin.import_history') }}";
+            }, 3000);
         } else {
-            resultsContent.innerHTML = `<div class="alert alert-danger">导入失败: ${result.error}</div>`;
-            resultsDiv.style.display = 'block';
+            resultsContent.innerHTML = `<div class="alert alert-danger">导入失败: ${result.error_description || result.error}</div>`;
         }
     } catch (error) {
         resultsContent.innerHTML = `<div class="alert alert-danger">请求失败: ${error.message}</div>`;
         resultsDiv.style.display = 'block';
     } finally {
-        btnText.textContent = '开始导入';
+        confirmBtn.disabled = false;
+        confirmBtnText.textContent = '确认导入';
     }
-});
+}
+
+function cancelImport() {
+    currentPreviewId = null;
+    document.getElementById('previewSection').style.display = 'none';
+    document.getElementById('importActions').style.display = 'none';
+    document.getElementById('previewBtnText').textContent = '预检数据';
+}
+
+function showToast(message) {
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.textContent = message;
+    toast.style.cssText = 'position: fixed; top: 20px; right: 20px; background: #333; color: white; padding: 10px 20px; border-radius: 4px; z-index: 9999;';
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 2000);
+}
 </script>
 <style>
 .results-grid {
@@ -192,6 +402,13 @@ document.getElementById('importForm').addEventListener('submit', async function(
     cursor: pointer;
 }
 
+.checkbox-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
 .info-box {
     background: #f8f9fa;
     padding: 20px;
@@ -214,6 +431,146 @@ document.getElementById('importForm').addEventListener('submit', async function(
 
 .info-box li {
     margin-bottom: 5px;
+}
+
+.loading {
+    text-align: center;
+    padding: 40px;
+    color: #6c757d;
+}
+
+.preview-summary h4,
+.preview-details h4 {
+    margin: 20px 0 15px 0;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #e9ecef;
+}
+
+.summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+}
+
+.summary-card {
+    padding: 15px;
+    background: #f8f9fa;
+    border-radius: 8px;
+}
+
+.summary-card h5 {
+    margin: 0 0 10px 0;
+    color: #333;
+}
+
+.summary-stats {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    font-size: 0.9em;
+}
+
+.stat-new { color: #28a745; }
+.stat-overwrite { color: #ffc107; }
+.stat-skip { color: #6c757d; }
+.stat-error { color: #dc3545; font-weight: bold; }
+
+.detail-section {
+    margin-bottom: 20px;
+}
+
+.detail-section h5 {
+    margin: 15px 0 10px 0;
+    color: #495057;
+}
+
+.detail-list {
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid #e9ecef;
+    border-radius: 4px;
+}
+
+.detail-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid #f1f3f5;
+    font-size: 0.9em;
+}
+
+.detail-item:last-child {
+    border-bottom: none;
+}
+
+.action-badge {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.8em;
+    font-weight: bold;
+    min-width: 50px;
+    text-align: center;
+}
+
+.action-new .action-badge { background: #d4edda; color: #155724; }
+.action-overwrite .action-badge { background: #fff3cd; color: #856404; }
+.action-skip .action-badge { background: #e9ecef; color: #495057; }
+.action-error .action-badge { background: #f8d7da; color: #721c24; }
+
+.item-name {
+    flex: 1;
+    font-weight: 500;
+}
+
+.item-reason {
+    color: #6c757d;
+    font-size: 0.85em;
+}
+
+.warnings-section {
+    margin-top: 20px;
+    padding: 15px;
+    background: #fff8e1;
+    border-radius: 8px;
+    border-left: 4px solid #ffc107;
+}
+
+.warnings-section h4 {
+    margin: 0 0 10px 0;
+    color: #856404;
+}
+
+.warning-list {
+    margin: 0;
+    padding-left: 20px;
+    color: #856404;
+}
+
+.warning-list li {
+    margin-bottom: 5px;
+}
+
+.form-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+
+.import-id {
+    margin: 15px 0;
+    padding: 10px;
+    background: #f8f9fa;
+    border-radius: 4px;
+}
+
+.toast {
+    animation: slideIn 0.3s ease;
+}
+
+@keyframes slideIn {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
 }
 </style>
 {% endblock %}

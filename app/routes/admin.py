@@ -3,7 +3,7 @@ import base64
 import urllib.parse
 from flask import Blueprint, render_template, request, redirect, url_for, jsonify, session
 from app import db
-from app.models import Token, Client, SimulatedError, Scope, Log, AuthorizationCode, utcnow
+from app.models import Token, Client, SimulatedError, Scope, Log, AuthorizationCode, ImportHistory, ErrorHit, utcnow
 from app.utils import log_request, create_token, validate_token
 
 admin_bp = Blueprint('admin', __name__)
@@ -262,7 +262,18 @@ def import_page():
 def playground():
     clients = Client.query.filter_by(is_active=True).all()
     scopes = Scope.query.filter_by(is_enabled=True).all()
-    return render_template('playground.html', clients=clients, scopes=scopes)
+    simulated_errors = SimulatedError.query.order_by(SimulatedError.name).all()
+    
+    temp_applied = []
+    if 'temp_error_states' in session:
+        temp_applied = [int(k) for k in session['temp_error_states'].keys()]
+    
+    return render_template('playground.html', 
+        clients=clients, 
+        scopes=scopes, 
+        simulated_errors=simulated_errors,
+        temp_applied_errors=temp_applied
+    )
 
 @admin_bp.route('/playground/run-client-credentials', methods=['POST'])
 def run_client_credentials():
@@ -447,3 +458,167 @@ def run_authorization_code():
         'token_type': token_data['token_type'],
         'expires_in': token_data['expires_in']
     })
+
+@admin_bp.route('/import/history', methods=['GET'])
+def import_history():
+    try:
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 20))
+        status = request.args.get('status')
+        
+        query = ImportHistory.query.order_by(ImportHistory.created_at.desc())
+        
+        if status:
+            query = query.filter_by(status=status)
+        
+        pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+        
+        return render_template('import_history.html',
+            history=pagination.items,
+            pagination=pagination,
+            status=status
+        )
+    except Exception as e:
+        current_app = __import__('flask').current_app
+        current_app.logger.error(f'Import history page error: {e}')
+        return render_template('import_history.html',
+            history=[],
+            pagination=None,
+            status=None,
+            error=str(e)
+        )
+
+@admin_bp.route('/import/history/<int:import_id>', methods=['GET'])
+def import_history_detail(import_id):
+    try:
+        history = ImportHistory.query.get_or_404(import_id)
+        return render_template('import_history_detail.html', history=history)
+    except Exception as e:
+        current_app = __import__('flask').current_app
+        current_app.logger.error(f'Import history detail error: {e}')
+        return redirect(url_for('admin.import_history'))
+
+@admin_bp.route('/error-hits', methods=['GET'])
+def error_hits():
+    try:
+        endpoint = request.args.get('endpoint', '')
+        client_id = request.args.get('client_id', '')
+        simulated_error_id = request.args.get('simulated_error_id', '')
+        limit = int(request.args.get('limit', 100))
+        
+        query = ErrorHit.query.order_by(ErrorHit.created_at.desc())
+        
+        if endpoint:
+            query = query.filter_by(endpoint=endpoint)
+        if client_id:
+            query = query.filter_by(client_id=client_id)
+        if simulated_error_id:
+            query = query.filter_by(simulated_error_id=int(simulated_error_id))
+        
+        hits = query.limit(limit).all()
+        simulated_errors = SimulatedError.query.all()
+        clients = Client.query.all()
+        
+        return render_template('error_hits.html',
+            hits=hits,
+            simulated_errors=simulated_errors,
+            clients=clients,
+            filter_endpoint=endpoint,
+            filter_client_id=client_id,
+            filter_error_id=simulated_error_id,
+            limit=limit
+        )
+    except Exception as e:
+        current_app = __import__('flask').current_app
+        current_app.logger.error(f'Error hits page error: {e}')
+        return render_template('error_hits.html',
+            hits=[],
+            simulated_errors=[],
+            clients=[],
+            filter_endpoint='',
+            filter_client_id='',
+            filter_error_id='',
+            limit=100,
+            error=str(e)
+        )
+
+@admin_bp.route('/playground/apply-error/<int:error_id>', methods=['POST'])
+def apply_error_config(error_id):
+    try:
+        error = SimulatedError.query.get_or_404(error_id)
+        
+        if 'temp_error_states' not in session:
+            session['temp_error_states'] = {}
+        
+        if error_id not in session['temp_error_states']:
+            session['temp_error_states'][str(error_id)] = {
+                'enabled': error.enabled,
+                'affected_endpoints': error.affected_endpoints
+            }
+        
+        error.enabled = True
+        db.session.commit()
+        session.modified = True
+        
+        log_request(
+            'admin_apply_error',
+            success=True,
+            error_message=f'Applied error config: {error.name}'
+        )
+        
+        return jsonify({
+            'success': True,
+            'message': f'已启用错误配置: {error.name}',
+            'error_id': error_id,
+            'error_name': error.name
+        })
+    except Exception as e:
+        db.session.rollback()
+        current_app = __import__('flask').current_app
+        current_app.logger.error(f'Apply error config error: {e}')
+        return jsonify({
+            'success': False,
+            'error': 'Failed to apply error config',
+            'error_description': str(e)
+        }), 500
+
+@admin_bp.route('/playground/restore-errors', methods=['POST'])
+def restore_error_configs():
+    try:
+        restored_count = 0
+        if 'temp_error_states' in session:
+            for error_id_str, state in session['temp_error_states'].items():
+                try:
+                    error_id = int(error_id_str)
+                    error = SimulatedError.query.get(error_id)
+                    if error:
+                        error.enabled = state['enabled']
+                        error.affected_endpoints = state['affected_endpoints']
+                        restored_count += 1
+                except Exception as e:
+                    current_app = __import__('flask').current_app
+                    current_app.logger.error(f'Failed to restore error {error_id_str}: {e}')
+            
+            db.session.commit()
+            del session['temp_error_states']
+        
+        log_request(
+            'admin_restore_errors',
+            success=True,
+            error_message=f'Restored {restored_count} error configs'
+        )
+        
+        return jsonify({
+            'success': True,
+            'message': f'已恢复 {restored_count} 个错误配置',
+            'restored_count': restored_count
+        })
+    except Exception as e:
+        db.session.rollback()
+        current_app = __import__('flask').current_app
+        current_app.logger.error(f'Restore error configs error: {e}')
+        return jsonify({
+            'success': False,
+            'error': 'Failed to restore error configs',
+            'error_description': str(e)
+        }), 500

@@ -4,7 +4,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from flask import request, jsonify, current_app
-from app.models import Token, Log, SimulatedError
+from app.models import Token, Log, SimulatedError, ErrorHit
 from app import db
 
 def generate_jwt_token(client_id, user_id, scope, expires_in):
@@ -82,6 +82,32 @@ def check_simulated_error(error_type, endpoint=None):
     
     for error in errors:
         if endpoint is None or error.affects_endpoint(endpoint):
+            try:
+                client_id = None
+                if hasattr(request, 'client') and request.client:
+                    client_id = request.client.client_id
+                else:
+                    client_id = request.form.get('client_id') or request.args.get('client_id')
+                    if not client_id and request.authorization:
+                        client_id = request.authorization.username
+                
+                error_hit = ErrorHit(
+                    simulated_error_id=error.id,
+                    endpoint=endpoint or 'unknown',
+                    client_id=client_id,
+                    error_type=error.error_type,
+                    status_code=error.status_code,
+                    error_message=error.error_message,
+                    request_path=request.path,
+                    ip_address=request.remote_addr,
+                    user_agent=request.user_agent.string[:500] if request.user_agent and request.user_agent.string else None
+                )
+                db.session.add(error_hit)
+                db.session.commit()
+            except Exception as e:
+                current_app.logger.error(f'Failed to record error hit: {e}')
+                db.session.rollback()
+            
             return {
                 'error': error.error_type,
                 'error_description': error.error_message or f'Simulated {error.error_type} error'

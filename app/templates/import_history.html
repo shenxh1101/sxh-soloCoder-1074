@@ -1,0 +1,178 @@
+{% extends 'base.html' %}
+
+{% block title %}导入历史 - OAuth2.0{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>导入历史</h1>
+    <a href="{{ url_for('admin.import_page') }}" class="btn btn-outline">返回导入页面</a>
+</div>
+
+{% if error %}
+<div class="alert alert-danger">
+    <strong>错误:</strong> {{ error }}
+</div>
+{% endif %}
+
+<div class="card">
+    <div class="section-header">
+        <h2>筛选</h2>
+    </div>
+    <form method="GET" class="filter-form">
+        <div class="form-group">
+            <label for="status">状态</label>
+            <select id="status" name="status" class="form-control" onchange="this.form.submit()">
+                <option value="">全部</option>
+                <option value="completed" {% if status == 'completed' %}selected{% endif %}>成功</option>
+                <option value="completed_with_errors" {% if status == 'completed_with_errors' %}selected{% endif %}>部分成功</option>
+                <option value="failed" {% if status == 'failed' %}selected{% endif %}>失败</option>
+            </select>
+        </div>
+    </form>
+</div>
+
+<div class="card">
+    <div class="section-header">
+        <h2>导入记录</h2>
+        <div>
+            <span class="text-muted">共 {{ pagination.total if pagination else 0 }} 条记录</span>
+        </div>
+    </div>
+    
+    {% if history %}
+    <div class="table-responsive">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>时间</th>
+                    <th>模式</th>
+                    <th>来源</th>
+                    <th>状态</th>
+                    <th>客户端</th>
+                    <th>Scope</th>
+                    <th>令牌</th>
+                    <th>错误配置</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in history %}
+                <tr>
+                    <td>{{ item.id }}</td>
+                    <td>{{ item.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td>
+                        <span class="tag tag-info">{{ item.import_mode }}</span>
+                    </td>
+                    <td>{{ item.source }}</td>
+                    <td>
+                        {% if item.status == 'completed' %}
+                        <span class="tag tag-success">成功</span>
+                        {% elif item.status == 'completed_with_errors' %}
+                        <span class="tag tag-warning">部分成功</span>
+                        {% elif item.status == 'failed' %}
+                        <span class="tag tag-danger">失败</span>
+                        {% else %}
+                        <span class="tag tag-secondary">{{ item.status }}</span>
+                        {% endif %}
+                    </td>
+                    {% set results = item.get_results() %}
+                    <td>
+                        <span class="stat-success">{{ results.clients.imported|default(0) }}</span> / 
+                        <span class="stat-warning">{{ results.clients.skipped|default(0) }}</span>
+                        {% if results.clients.errors|default([]) %}
+                        <span class="stat-error">{{ results.clients.errors|length }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <span class="stat-success">{{ results.scopes.imported|default(0) }}</span> / 
+                        <span class="stat-warning">{{ results.scopes.skipped|default(0) }}</span>
+                    </td>
+                    <td>
+                        <span class="stat-success">{{ results.tokens.imported|default(0) }}</span> / 
+                        <span class="stat-warning">{{ results.tokens.skipped|default(0) }}</span>
+                    </td>
+                    <td>
+                        <span class="stat-success">{{ results.simulated_errors.imported|default(0) }}</span> / 
+                        <span class="stat-warning">{{ results.simulated_errors.skipped|default(0) }}</span>
+                    </td>
+                    <td>
+                        <a href="{{ url_for('admin.import_history_detail', import_id=item.id) }}" class="btn btn-xs btn-primary">详情</a>
+                        <a href="{{ url_for('api.download_import_report', import_id=item.id) }}" class="btn btn-xs btn-secondary">下载报告</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    
+    {% if pagination and pagination.pages > 1 %}
+    <nav class="pagination">
+        {% if pagination.has_prev %}
+        <a href="{{ url_for('admin.import_history', page=pagination.prev_num, status=status) }}" class="page-link">上一页</a>
+        {% endif %}
+        
+        <span class="page-info">
+            第 {{ pagination.page }} 页 / 共 {{ pagination.pages }} 页
+        </span>
+        
+        {% if pagination.has_next %}
+        <a href="{{ url_for('admin.import_history', page=pagination.next_num, status=status) }}" class="page-link">下一页</a>
+        {% endif %}
+    </nav>
+    {% endif %}
+    
+    {% else %}
+    <div class="empty-state">
+        <p>暂无导入记录</p>
+    </div>
+    {% endif %}
+</div>
+
+<style>
+.filter-form {
+    display: flex;
+    gap: 15px;
+    align-items: flex-end;
+}
+
+.filter-form .form-group {
+    margin-bottom: 0;
+    min-width: 200px;
+}
+
+.table-responsive {
+    overflow-x: auto;
+}
+
+.stat-success { color: #28a745; font-weight: bold; }
+.stat-warning { color: #ffc107; font-weight: bold; }
+.stat-error { color: #dc3545; font-weight: bold; }
+
+.pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 15px;
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid #eee;
+}
+
+.page-link {
+    padding: 8px 16px;
+    background: #007bff;
+    color: white;
+    text-decoration: none;
+    border-radius: 4px;
+}
+
+.page-link:hover {
+    background: #0056b3;
+}
+
+.page-info {
+    color: #6c757d;
+}
+</style>
+{% endblock %}

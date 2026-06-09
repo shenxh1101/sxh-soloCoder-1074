@@ -77,6 +77,41 @@
             </select>
         </div>
         
+        <div class="form-group">
+            <label>模拟错误配置</label>
+            <div class="error-config-section">
+                <div class="error-actions">
+                    <span class="text-muted">选择要临时启用的错误配置</span>
+                    <button type="button" class="btn btn-xs btn-warning" onclick="restoreAllErrors()" id="restoreBtn" style="display: none;">
+                        ↩ 恢复所有错误配置
+                    </button>
+                </div>
+                <div class="error-list">
+                    {% for error in simulated_errors %}
+                        <label class="error-item">
+                            <input type="checkbox" 
+                                   name="simulated_error" 
+                                   value="{{ error.id }}"
+                                   data-error-name="{{ error.name }}"
+                                   {% if error.id in temp_applied_errors %}checked{% endif %}
+                                   {% if error.enabled and error.id not in temp_applied_errors %}checked disabled{% endif %}
+                                   onchange="toggleError({{ error.id }}, this)">
+                            <span class="error-name">{{ error.name }}</span>
+                            <span class="error-type-badge">{{ error.error_type }}</span>
+                            <span class="error-status {% if error.enabled %}status-enabled{% endif %}">
+                                {% if error.enabled %}已启用{% else %}未启用{% endif %}
+                            </span>
+                        </label>
+                    {% endfor %}
+                </div>
+                {% if temp_applied_errors %}
+                <div class="applied-notice">
+                    <span class="tag tag-warning">⚠️ 已临时启用 {{ temp_applied_errors|length }} 个错误配置</span>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        
         <button type="button" class="btn btn-primary btn-block btn-lg" onclick="runFlow()" id="runBtn">
             ▶ 开始测试
         </button>
@@ -111,6 +146,8 @@ const clients = {{ clients|tojson|safe }};
 const clientMap = {};
 clients.forEach(c => clientMap[c.client_id] = c);
 
+let tempAppliedErrors = {{ temp_applied_errors|tojson|safe }};
+
 function updateForm() {
     const grantType = document.getElementById('grantType').value;
     const authCodeFields = document.getElementById('authCodeFields');
@@ -143,13 +180,95 @@ function copyToClipboard(elementId) {
     showToast('已复制到剪贴板');
 }
 
-function showToast(message) {
+function showToast(message, type = 'info') {
     const toast = document.createElement('div');
     toast.className = 'toast';
     toast.textContent = message;
-    toast.style.cssText = 'position: fixed; top: 20px; right: 20px; background: #333; color: white; padding: 10px 20px; border-radius: 4px; z-index: 9999;';
+    
+    let bgColor = '#333';
+    if (type === 'success') bgColor = '#28a745';
+    if (type === 'error') bgColor = '#dc3545';
+    if (type === 'warning') bgColor = '#ffc107';
+    
+    toast.style.cssText = `position: fixed; top: 20px; right: 20px; background: ${bgColor}; color: white; padding: 10px 20px; border-radius: 4px; z-index: 9999;`;
     document.body.appendChild(toast);
     setTimeout(() => toast.remove(), 2000);
+}
+
+async function toggleError(errorId, checkbox) {
+    const errorName = checkbox.dataset.errorName;
+    
+    try {
+        if (checkbox.checked) {
+            const response = await fetch(`{{ url_for('admin.apply_error_config', error_id=0) }}`.replace('/0', '/' + errorId), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                if (!tempAppliedErrors.includes(errorId)) {
+                    tempAppliedErrors.push(errorId);
+                }
+                showToast(result.message, 'success');
+                updateRestoreButton();
+            } else {
+                checkbox.checked = false;
+                showToast(result.error_description || result.error, 'error');
+            }
+        } else {
+            showToast('请点击"恢复所有错误配置"按钮来恢复', 'warning');
+            checkbox.checked = true;
+        }
+    } catch (error) {
+        checkbox.checked = !checkbox.checked;
+        showToast('操作失败: ' + error.message, 'error');
+    }
+}
+
+async function restoreAllErrors() {
+    if (!confirm('确定要恢复所有临时修改的错误配置吗？')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch('{{ url_for('admin.restore_error_configs') }}', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+            tempAppliedErrors = [];
+            document.querySelectorAll('input[name="simulated_error"]').forEach(cb => {
+                if (!cb.disabled) {
+                    cb.checked = false;
+                }
+            });
+            showToast(result.message, 'success');
+            updateRestoreButton();
+            
+            setTimeout(() => {
+                window.location.reload();
+            }, 1000);
+        } else {
+            showToast(result.error_description || result.error, 'error');
+        }
+    } catch (error) {
+        showToast('恢复失败: ' + error.message, 'error');
+    }
+}
+
+function updateRestoreButton() {
+    const restoreBtn = document.getElementById('restoreBtn');
+    if (tempAppliedErrors.length > 0) {
+        restoreBtn.style.display = 'inline-block';
+        restoreBtn.textContent = `↩ 恢复 ${tempAppliedErrors.length} 个错误配置`;
+    } else {
+        restoreBtn.style.display = 'none';
+    }
 }
 
 async function runFlow() {
@@ -368,6 +487,10 @@ function copyToClipboardValue(value) {
     navigator.clipboard.writeText(value);
     showToast('已复制到剪贴板');
 }
+
+document.addEventListener('DOMContentLoaded', function() {
+    updateRestoreButton();
+});
 </script>
 <style>
 .flow-steps {
@@ -503,6 +626,82 @@ function copyToClipboardValue(value) {
 @keyframes slideIn {
     from { transform: translateX(100%); opacity: 0; }
     to { transform: translateX(0); opacity: 1; }
+}
+
+.error-config-section {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 15px;
+}
+
+.error-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.error-list {
+    max-height: 300px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.error-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    background: white;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.error-item:hover {
+    background: #f1f3f5;
+}
+
+.error-item input[type="checkbox"] {
+    cursor: pointer;
+}
+
+.error-item:has(input:disabled) {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+.error-name {
+    flex: 1;
+    font-weight: 500;
+}
+
+.error-type-badge {
+    padding: 2px 8px;
+    background: #e9ecef;
+    border-radius: 4px;
+    font-size: 0.85em;
+    color: #495057;
+    font-family: monospace;
+}
+
+.error-status {
+    font-size: 0.85em;
+    color: #6c757d;
+}
+
+.error-status.status-enabled {
+    color: #28a745;
+    font-weight: bold;
+}
+
+.applied-notice {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid #dee2e6;
+    text-align: center;
 }
 </style>
 {% endblock %}

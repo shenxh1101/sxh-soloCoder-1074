@@ -1,0 +1,185 @@
+{% extends 'base.html' %}
+
+{% block title %}错误命中记录 - OAuth2.0{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>错误命中记录</h1>
+    <a href="{{ url_for('admin.index') }}" class="btn btn-outline">返回管理面板</a>
+</div>
+
+{% if error %}
+<div class="alert alert-danger">
+    <strong>错误:</strong> {{ error }}
+</div>
+{% endif %}
+
+<div class="card">
+    <div class="section-header">
+        <h2>筛选</h2>
+    </div>
+    <form method="GET" class="filter-form grid-4">
+        <div class="form-group">
+            <label for="endpoint">端点</label>
+            <select id="endpoint" name="endpoint" class="form-control" onchange="this.form.submit()">
+                <option value="">全部</option>
+                <option value="authorize" {% if filter_endpoint == 'authorize' %}selected{% endif %}>Authorize</option>
+                <option value="token" {% if filter_endpoint == 'token' %}selected{% endif %}>Token</option>
+                <option value="introspect" {% if filter_endpoint == 'introspect' %}selected{% endif %}>Introspect</option>
+                <option value="revoke" {% if filter_endpoint == 'revoke' %}selected{% endif %}>Revoke</option>
+            </select>
+        </div>
+        
+        <div class="form-group">
+            <label for="client_id">客户端</label>
+            <select id="client_id" name="client_id" class="form-control" onchange="this.form.submit()">
+                <option value="">全部</option>
+                {% for client in clients %}
+                <option value="{{ client.client_id }}" {% if filter_client_id == client.client_id %}selected{% endif %}>
+                    {{ client.name }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+        
+        <div class="form-group">
+            <label for="simulated_error_id">错误配置</label>
+            <select id="simulated_error_id" name="simulated_error_id" class="form-control" onchange="this.form.submit()">
+                <option value="">全部</option>
+                {% for err in simulated_errors %}
+                <option value="{{ err.id }}" {% if filter_error_id == err.id|string %}selected{% endif %}>
+                    {{ err.name }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+        
+        <div class="form-group">
+            <label for="limit">返回数量</label>
+            <select id="limit" name="limit" class="form-control" onchange="this.form.submit()">
+                <option value="50" {% if limit == 50 %}selected{% endif %}>50</option>
+                <option value="100" {% if limit == 100 %}selected{% endif %}>100</option>
+                <option value="200" {% if limit == 200 %}selected{% endif %}>200</option>
+                <option value="500" {% if limit == 500 %}selected{% endif %}>500</option>
+            </select>
+        </div>
+    </form>
+</div>
+
+<div class="card">
+    <div class="section-header">
+        <h2>命中记录</h2>
+        <div>
+            <span class="text-muted">共 {{ hits|length }} 条记录</span>
+            <a href="{{ url_for('api.get_error_hits', endpoint=filter_endpoint, client_id=filter_client_id, simulated_error_id=filter_error_id, limit=limit) }}" 
+               class="btn btn-xs btn-secondary" style="margin-left: 15px;">
+                查看API
+            </a>
+        </div>
+    </div>
+    
+    {% if hits %}
+    <div class="table-responsive">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>时间</th>
+                    <th>错误配置</th>
+                    <th>错误类型</th>
+                    <th>状态码</th>
+                    <th>端点</th>
+                    <th>客户端</th>
+                    <th>IP地址</th>
+                    <th>请求路径</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for hit in hits %}
+                <tr>
+                    <td>{{ hit.id }}</td>
+                    <td>{{ hit.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td>
+                        {% if hit.simulated_error %}
+                        <span class="tag tag-info">{{ hit.simulated_error.name }}</span>
+                        {% else %}
+                        <span class="text-muted">-</span>
+                        {% endif %}
+                    </td>
+                    <td><code>{{ hit.error_type }}</code></td>
+                    <td>
+                        <span class="status-badge {% if hit.status_code >= 500 %}status-error{% elif hit.status_code >= 400 %}status-warning{% else %}status-success{% endif %}">
+                            {{ hit.status_code }}
+                        </span>
+                    </td>
+                    <td><span class="tag tag-secondary">{{ hit.endpoint }}</span></td>
+                    <td>
+                        {% if hit.client %}
+                        {{ hit.client.name }}
+                        {% elif hit.client_id %}
+                        <code>{{ hit.client_id }}</code>
+                        {% else %}
+                        <span class="text-muted">-</span>
+                        {% endif %}
+                    </td>
+                    <td><code>{{ hit.ip_address }}</code></td>
+                    <td><small>{{ hit.request_path }}</small></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    
+    {% else %}
+    <div class="empty-state">
+        <p>暂无错误命中记录</p>
+        <p class="text-muted">当启用的模拟错误被触发时，记录会显示在这里</p>
+    </div>
+    {% endif %}
+</div>
+
+<style>
+.filter-form {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+    align-items: flex-end;
+}
+
+.filter-form .form-group {
+    margin-bottom: 0;
+}
+
+.table-responsive {
+    overflow-x: auto;
+}
+
+.status-badge {
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: bold;
+    display: inline-block;
+}
+
+.status-success { background: #d4edda; color: #155724; }
+.status-error { background: #f8d7da; color: #721c24; }
+.status-warning { background: #fff3cd; color: #856404; }
+
+.grid-4 {
+    grid-template-columns: repeat(4, 1fr);
+}
+
+@media (max-width: 992px) {
+    .grid-4 {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 576px) {
+    .grid-4 {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+{% endblock %}

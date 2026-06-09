@@ -1,3 +1,4 @@
+import json
 import secrets
 import string
 from datetime import datetime, timedelta, timezone
@@ -233,4 +234,70 @@ class SimulatedError(db.Model):
             'status_code': self.status_code,
             'error_message': self.error_message,
             'affected_endpoints': self.get_affected_endpoints()
+        }
+
+class ImportHistory(db.Model):
+    __tablename__ = 'import_history'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    import_mode = db.Column(db.String(20), nullable=False)
+    status = db.Column(db.String(20), nullable=False)
+    source = db.Column(db.String(255))
+    results = db.Column(db.Text)
+    error_message = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=utcnow)
+    
+    def get_results(self):
+        try:
+            return json.loads(self.results) if self.results else {}
+        except:
+            return {}
+    
+    def set_results(self, results):
+        self.results = json.dumps(results)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'import_mode': self.import_mode,
+            'status': self.status,
+            'source': self.source,
+            'results': self.get_results(),
+            'error_message': self.error_message,
+            'created_at': self.created_at.isoformat()
+        }
+
+class ErrorHit(db.Model):
+    __tablename__ = 'error_hits'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    simulated_error_id = db.Column(db.Integer, db.ForeignKey('simulated_errors.id'), nullable=False)
+    endpoint = db.Column(db.String(50), nullable=False)
+    client_id = db.Column(db.String(64), db.ForeignKey('clients.client_id'))
+    error_type = db.Column(db.String(50), nullable=False)
+    status_code = db.Column(db.Integer, nullable=False)
+    error_message = db.Column(db.String(500))
+    request_path = db.Column(db.String(500))
+    ip_address = db.Column(db.String(45))
+    user_agent = db.Column(db.String(500))
+    created_at = db.Column(db.DateTime, default=utcnow)
+    
+    simulated_error = db.relationship('SimulatedError', backref=db.backref('hits', lazy=True))
+    client = db.relationship('Client', backref=db.backref('error_hits', lazy=True))
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'simulated_error_id': self.simulated_error_id,
+            'simulated_error_name': self.simulated_error.name if self.simulated_error else None,
+            'endpoint': self.endpoint,
+            'client_id': self.client_id,
+            'client_name': self.client.name if self.client else None,
+            'error_type': self.error_type,
+            'status_code': self.status_code,
+            'error_message': self.error_message,
+            'request_path': self.request_path,
+            'ip_address': self.ip_address,
+            'user_agent': self.user_agent,
+            'created_at': self.created_at.isoformat()
         }

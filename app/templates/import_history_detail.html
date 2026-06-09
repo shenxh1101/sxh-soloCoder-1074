@@ -1,0 +1,240 @@
+{% extends 'base.html' %}
+
+{% block title %}导入详情 #{{ history.id }} - OAuth2.0{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>导入详情 #{{ history.id }}</h1>
+    <div>
+        <a href="{{ url_for('admin.import_history') }}" class="btn btn-outline">返回列表</a>
+        <a href="{{ url_for('api.download_import_report', import_id=history.id) }}" class="btn btn-primary">下载报告</a>
+    </div>
+</div>
+
+<div class="grid-2">
+    <div class="card">
+        <div class="section-header">
+            <h2>基本信息</h2>
+        </div>
+        <div class="info-list">
+            <div class="info-item">
+                <label>导入ID</label>
+                <span>{{ history.id }}</span>
+            </div>
+            <div class="info-item">
+                <label>导入时间</label>
+                <span>{{ history.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+            </div>
+            <div class="info-item">
+                <label>导入模式</label>
+                <span class="tag tag-info">{{ history.import_mode }}</span>
+            </div>
+            <div class="info-item">
+                <label>来源</label>
+                <span>{{ history.source }}</span>
+            </div>
+            <div class="info-item">
+                <label>状态</label>
+                {% if history.status == 'completed' %}
+                <span class="tag tag-success">成功</span>
+                {% elif history.status == 'completed_with_errors' %}
+                <span class="tag tag-warning">部分成功</span>
+                {% elif history.status == 'failed' %}
+                <span class="tag tag-danger">失败</span>
+                {% else %}
+                <span class="tag tag-secondary">{{ history.status }}</span>
+                {% endif %}
+            </div>
+            {% if history.error_message %}
+            <div class="info-item">
+                <label>错误信息</label>
+                <span class="text-danger">{{ history.error_message }}</span>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    
+    <div class="card">
+        <div class="section-header">
+            <h2>导入统计</h2>
+        </div>
+        {% set results = history.get_results() %}
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h4>客户端</h4>
+                <p class="stat-success">导入: {{ results.clients.imported|default(0) }}</p>
+                <p class="stat-warning">跳过: {{ results.clients.skipped|default(0) }}</p>
+                {% if results.clients.errors|default([]) %}
+                <p class="stat-error">错误: {{ results.clients.errors|length }}</p>
+                {% endif %}
+            </div>
+            <div class="stat-card">
+                <h4>Scope</h4>
+                <p class="stat-success">导入: {{ results.scopes.imported|default(0) }}</p>
+                <p class="stat-warning">跳过: {{ results.scopes.skipped|default(0) }}</p>
+                {% if results.scopes.errors|default([]) %}
+                <p class="stat-error">错误: {{ results.scopes.errors|length }}</p>
+                {% endif %}
+            </div>
+            <div class="stat-card">
+                <h4>令牌</h4>
+                <p class="stat-success">导入: {{ results.tokens.imported|default(0) }}</p>
+                <p class="stat-warning">跳过: {{ results.tokens.skipped|default(0) }}</p>
+                {% if results.tokens.errors|default([]) %}
+                <p class="stat-error">错误: {{ results.tokens.errors|length }}</p>
+                {% endif %}
+            </div>
+            <div class="stat-card">
+                <h4>错误配置</h4>
+                <p class="stat-success">导入: {{ results.simulated_errors.imported|default(0) }}</p>
+                <p class="stat-warning">跳过: {{ results.simulated_errors.skipped|default(0) }}</p>
+                {% if results.simulated_errors.errors|default([]) %}
+                <p class="stat-error">错误: {{ results.simulated_errors.errors|length }}</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{% set results = history.get_results() %}
+{% for type_name in ['clients', 'scopes', 'tokens', 'simulated_errors'] %}
+    {% set type_data = results.get(type_name, {}) %}
+    {% set type_display = {'clients': '客户端', 'scopes': 'Scope', 'tokens': '令牌', 'simulated_errors': '错误配置'} %}
+    
+    {% if type_data.get('details') or type_data.get('errors') %}
+    <div class="card">
+        <div class="section-header">
+            <h2>{{ type_display[type_name] }} 详情</h2>
+        </div>
+        
+        {% if type_data.get('details') %}
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>操作</th>
+                        <th>标识</th>
+                        <th>名称</th>
+                        <th>原因</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for detail in type_data.details %}
+                    <tr>
+                        <td>
+                            {% if detail.action == 'created' %}
+                            <span class="tag tag-success">新建</span>
+                            {% elif detail.action == 'overwritten' %}
+                            <span class="tag tag-warning">覆盖</span>
+                            {% elif detail.action == 'skipped' %}
+                            <span class="tag tag-secondary">跳过</span>
+                            {% else %}
+                            <span class="tag tag-info">{{ detail.action }}</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ detail.client_id or detail.name or '-' }}</td>
+                        <td>{{ detail.name or '-' }}</td>
+                        <td>{{ detail.reason or '-' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+        
+        {% if type_data.get('errors') %}
+        <div class="error-section">
+            <h4>错误列表</h4>
+            <ul class="error-list">
+                {% for error in type_data.errors %}
+                <li class="text-danger">{{ error }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
+{% endfor %}
+
+<style>
+.info-list {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.info-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid #eee;
+}
+
+.info-item:last-child {
+    border-bottom: none;
+}
+
+.info-item label {
+    font-weight: 600;
+    color: #495057;
+    margin: 0;
+}
+
+.info-item span {
+    color: #333;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 15px;
+}
+
+.stat-card {
+    padding: 15px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border-left: 4px solid #007bff;
+}
+
+.stat-card h4 {
+    margin: 0 0 10px 0;
+    color: #333;
+}
+
+.stat-card p {
+    margin: 5px 0;
+}
+
+.stat-success { color: #28a745; font-weight: bold; }
+.stat-warning { color: #ffc107; font-weight: bold; }
+.stat-error { color: #dc3545; font-weight: bold; }
+
+.table-responsive {
+    overflow-x: auto;
+    margin-top: 15px;
+}
+
+.error-section {
+    margin-top: 20px;
+    padding: 15px;
+    background: #fff3f3;
+    border-radius: 8px;
+}
+
+.error-section h4 {
+    margin: 0 0 10px 0;
+    color: #dc3545;
+}
+
+.error-list {
+    margin: 0;
+    padding-left: 20px;
+}
+
+.error-list li {
+    margin-bottom: 5px;
+}
+</style>
+{% endblock %}

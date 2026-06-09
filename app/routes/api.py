@@ -1,7 +1,8 @@
-import json
-from flask import Blueprint, request, jsonify, Response, current_app
+﻿import json
+from datetime import datetime
+from flask import Blueprint, request, jsonify, Response, current_app, session
 from app import db
-from app.models import Client, Scope, Token, Log, AuthorizationCode, SimulatedError, utcnow
+from app.models import Client, Scope, Token, Log, AuthorizationCode, SimulatedError, ImportHistory, ErrorHit, utcnow
 from app.utils import log_request, validate_token
 
 api_bp = Blueprint('api', __name__)
@@ -253,9 +254,10 @@ def get_token_detail(token_id):
     token_dict['introspect'] = introspect_result
     return jsonify(token_dict)
 
-@api_bp.route('/import', methods=['POST'])
-def import_data():
+@api_bp.route('/import/preview', methods=['POST'])
+def preview_import():
     data = None
+    filename = None
     try:
         if 'file' in request.files:
             file = request.files['file']
@@ -263,15 +265,16 @@ def import_data():
                 return jsonify({
                     'success': False,
                     'error': 'No file uploaded',
-                    'error_description': '请选择要导入的JSON文件'
+                    'error_description': 'Please select the JSON file to import'
                 }), 400
             
+            filename = file.filename
             content = file.read()
             if not content or len(content.strip()) == 0:
                 return jsonify({
                     'success': False,
                     'error': 'Empty file',
-                    'error_description': '上传的文件是空的，请检查文件内容'
+                    'error_description': 'The uploaded file is empty, please check the file content'
                 }), 400
             
             try:
@@ -280,7 +283,7 @@ def import_data():
                 return jsonify({
                     'success': False,
                     'error': 'Invalid JSON format',
-                    'error_description': f'JSON格式错误: {str(e)}，请检查文件内容是否为有效的JSON格式'
+                    'error_description': f'JSON format error: {str(e)}, please check if the file content is valid JSON format'
                 }), 400
         else:
             data = request.get_json()
@@ -288,14 +291,14 @@ def import_data():
                 return jsonify({
                     'success': False,
                     'error': 'No data provided',
-                    'error_description': '请提供要导入的JSON数据'
+                    'error_description': 'Please provide the JSON data to import'
                 }), 400
         
         if not isinstance(data, dict):
             return jsonify({
                 'success': False,
                 'error': 'Invalid data format',
-                'error_description': '导入的数据必须是JSON对象格式'
+                'error_description': 'The imported data must be a JSON object format'
             }), 400
         
         has_valid_data = any(key in data for key in ['clients', 'scopes', 'tokens', 'simulated_errors'])
@@ -303,45 +306,270 @@ def import_data():
             return jsonify({
                 'success': False,
                 'error': 'No valid data sections found',
-                'error_description': '未找到有效的数据段，请确保JSON包含clients、scopes、tokens或simulated_errors中的至少一个'
+                'error_description': 'No valid data sections found, please ensure JSON contains at least one of clients, scopes, tokens, or simulated_errors'
             }), 400
         
-        if 'clients' in data and not isinstance(data['clients'], list):
-            return jsonify({
-                'success': False,
-                'error': 'Invalid clients format',
-                'error_description': 'clients字段必须是数组格式'
-            }), 400
-        
-        if 'tokens' in data and not isinstance(data['tokens'], list):
-            return jsonify({
-                'success': False,
-                'error': 'Invalid tokens format',
-                'error_description': 'tokens字段必须是数组格式'
-            }), 400
-        
-        if 'scopes' in data and not isinstance(data['scopes'], list):
-            return jsonify({
-                'success': False,
-                'error': 'Invalid scopes format',
-                'error_description': 'scopes字段必须是数组格式'
-            }), 400
-        
-        if 'simulated_errors' in data and not isinstance(data['simulated_errors'], list):
-            return jsonify({
-                'success': False,
-                'error': 'Invalid simulated_errors format',
-                'error_description': 'simulated_errors字段必须是数组格式'
-            }), 400
-        
-        results = {
-            'clients': {'imported': 0, 'skipped': 0, 'errors': []},
-            'scopes': {'imported': 0, 'skipped': 0, 'errors': []},
-            'tokens': {'imported': 0, 'skipped': 0, 'errors': []},
-            'simulated_errors': {'imported': 0, 'skipped': 0, 'errors': []}
-        }
+        for key in ['clients', 'scopes', 'tokens', 'simulated_errors']:
+            if key in data and not isinstance(data[key], list):
+                return jsonify({
+                    'success': False,
+                    'error': f'Invalid {key} format',
+                    'error_description': f'{key} field must be an array format'
+                }), 400
         
         mode = request.args.get('mode', 'skip')
+        existing_clients = {c.client_id: c for c in Client.query.all()}
+        existing_tokens = {t.access_token: t for t in Token.query.all()}
+        existing_scopes = {s.name: s for s in Scope.query.all()}
+        existing_errors = {e.name: e for e in SimulatedError.query.all()}
+        
+        preview = {
+            'summary': {
+                'clients': {'new': 0, 'overwrite': 0, 'skip': 0, 'error': 0},
+                'scopes': {'new': 0, 'overwrite': 0, 'skip': 0, 'error': 0},
+                'tokens': {'new': 0, 'overwrite': 0, 'skip': 0, 'error': 0},
+                'simulated_errors': {'new': 0, 'overwrite': 0, 'skip': 0, 'error': 0}
+            },
+            'details': {
+                'clients': [],
+                'scopes': [],
+                'tokens': [],
+                'simulated_errors': []
+            },
+            'warnings': [],
+            'can_import': True
+        }
+        
+        if 'clients' in data:
+            for idx, client_data in enumerate(data['clients']):
+                item = {'index': idx, 'data': client_data, 'action': None, 'reason': None}
+                required_fields = ['client_id', 'name', 'redirect_uris']
+                missing = [f for f in required_fields if f not in client_data or not client_data[f]]
+                if missing:
+                    item['action'] = 'error'
+                    item['reason'] = f'Missing required fields: {", ".join(missing)}'
+                    preview['summary']['clients']['error'] += 1
+                    preview['can_import'] = False
+                else:
+                    existing = existing_clients.get(client_data['client_id'])
+                    if existing:
+                        if mode == 'skip':
+                            item['action'] = 'skip'
+                            item['reason'] = f'client_id already exists: {client_data["client_id"]}'
+                            preview['summary']['clients']['skip'] += 1
+                        elif mode == 'overwrite':
+                            item['action'] = 'overwrite'
+                            item['reason'] = f'Will overwrite existing client: {existing.name}'
+                            preview['summary']['clients']['overwrite'] += 1
+                    else:
+                        item['action'] = 'new'
+                        item['reason'] = 'New client'
+                        preview['summary']['clients']['new'] += 1
+                preview['details']['clients'].append(item)
+        
+        if 'scopes' in data:
+            for idx, scope_data in enumerate(data['scopes']):
+                item = {'index': idx, 'data': scope_data, 'action': None, 'reason': None}
+                if 'name' not in scope_data or not scope_data['name']:
+                    item['action'] = 'error'
+                    item['reason'] = 'Missing required field: name'
+                    preview['summary']['scopes']['error'] += 1
+                    preview['can_import'] = False
+                else:
+                    existing = existing_scopes.get(scope_data['name'])
+                    if existing:
+                        if mode == 'skip':
+                            item['action'] = 'skip'
+                            item['reason'] = f'scope already exists: {scope_data["name"]}'
+                            preview['summary']['scopes']['skip'] += 1
+                        elif mode == 'overwrite':
+                            item['action'] = 'overwrite'
+                            item['reason'] = f'Will overwrite existing scope: {existing.name}'
+                            preview['summary']['scopes']['overwrite'] += 1
+                    else:
+                        item['action'] = 'new'
+                        item['reason'] = 'New scope'
+                        preview['summary']['scopes']['new'] += 1
+                preview['details']['scopes'].append(item)
+        
+        if 'tokens' in data:
+            for idx, token_data in enumerate(data['tokens']):
+                item = {'index': idx, 'data': {}, 'action': None, 'reason': None}
+                token_display = {k: v for k, v in token_data.items() if k != 'access_token' and k != 'refresh_token'}
+                if 'access_token' in token_data:
+                    token_display['access_token'] = token_data['access_token'][:20] + '...'
+                item['data'] = token_display
+                
+                required_fields = ['access_token', 'client_id', 'expires_at']
+                missing = [f for f in required_fields if f not in token_data or not token_data[f]]
+                if missing:
+                    item['action'] = 'error'
+                    item['reason'] = f'Missing required fields: {", ".join(missing)}'
+                    preview['summary']['tokens']['error'] += 1
+                    preview['can_import'] = False
+                else:
+                    if token_data['client_id'] not in existing_clients:
+                        client_in_import = any(
+                            c.get('client_id') == token_data['client_id'] 
+                            for c in data.get('clients', [])
+                        )
+                        if not client_in_import:
+                            preview['warnings'].append(
+                                f'Token[{idx}] references a non-existent client_id: {token_data["client_id"]}, will not be able to link to client after import'
+                            )
+                    
+                    existing = existing_tokens.get(token_data['access_token'])
+                    if existing:
+                        if mode == 'skip':
+                            item['action'] = 'skip'
+                            item['reason'] = 'access_token already exists'
+                            preview['summary']['tokens']['skip'] += 1
+                        elif mode == 'overwrite':
+                            item['action'] = 'overwrite'
+                            item['reason'] = 'Will overwrite existing token'
+                            preview['summary']['tokens']['overwrite'] += 1
+                    else:
+                        item['action'] = 'new'
+                        item['reason'] = 'New token'
+                        preview['summary']['tokens']['new'] += 1
+                preview['details']['tokens'].append(item)
+        
+        if 'simulated_errors' in data:
+            for idx, error_data in enumerate(data['simulated_errors']):
+                item = {'index': idx, 'data': error_data, 'action': None, 'reason': None}
+                required_fields = ['name', 'error_type']
+                missing = [f for f in required_fields if f not in error_data or not error_data[f]]
+                if missing:
+                    item['action'] = 'error'
+                    item['reason'] = f'Missing required fields: {", ".join(missing)}'
+                    preview['summary']['simulated_errors']['error'] += 1
+                    preview['can_import'] = False
+                else:
+                    existing = existing_errors.get(error_data['name'])
+                    if existing:
+                        if mode == 'skip':
+                            item['action'] = 'skip'
+                            item['reason'] = f'Error config already exists: {error_data["name"]}'
+                            preview['summary']['simulated_errors']['skip'] += 1
+                        elif mode == 'overwrite':
+                            item['action'] = 'overwrite'
+                            item['reason'] = f'Will overwrite existing error config: {existing.name}'
+                            preview['summary']['simulated_errors']['overwrite'] += 1
+                    else:
+                        item['action'] = 'new'
+                        item['reason'] = 'New error config'
+                        preview['summary']['simulated_errors']['new'] += 1
+                preview['details']['simulated_errors'].append(item)
+        
+        preview_id = f"preview_{datetime.now().timestamp()}"
+        session['import_preview'] = {
+            'id': preview_id,
+            'data': data,
+            'mode': mode,
+            'filename': filename,
+            'preview': preview
+        }
+        
+        return jsonify({
+            'success': True,
+            'preview_id': preview_id,
+            'mode': mode,
+            'filename': filename,
+            'preview': preview
+        })
+        
+    except Exception as e:
+        current_app.logger.error(f'Import preview error: {e}')
+        return jsonify({
+            'success': False,
+            'error': 'Preview failed',
+            'error_description': str(e)
+        }), 500
+
+@api_bp.route('/import', methods=['POST'])
+def import_data():
+    data = None
+    filename = None
+    mode = request.args.get('mode', 'skip')
+    atomic = request.args.get('atomic', 'true').lower() == 'true'
+    confirm = request.args.get('confirm', 'false').lower() == 'true'
+    preview_id = request.args.get('preview_id')
+    
+    if not confirm:
+        return jsonify({
+            'success': False,
+            'error': 'Import not confirmed',
+            'error_description': 'Please preview and confirm the import first'
+        }), 400
+    
+    import_history = None
+    try:
+        if preview_id and 'import_preview' in session and session['import_preview']['id'] == preview_id:
+            preview_data = session['import_preview']
+            data = preview_data['data']
+            mode = preview_data['mode']
+            filename = preview_data['filename']
+            del session['import_preview']
+        else:
+            if 'file' in request.files:
+                file = request.files['file']
+                if not file or file.filename == '':
+                    return jsonify({
+                        'success': False,
+                        'error': 'No file uploaded',
+                        'error_description': 'Please select the JSON file to import'
+                    }), 400
+                
+                filename = file.filename
+                content = file.read()
+                if not content or len(content.strip()) == 0:
+                    return jsonify({
+                        'success': False,
+                        'error': 'Empty file',
+                        'error_description': 'The uploaded file is empty, please check the file content'
+                    }), 400
+                
+                try:
+                    data = json.loads(content.decode('utf-8'))
+                except json.JSONDecodeError as e:
+                    return jsonify({
+                        'success': False,
+                        'error': 'Invalid JSON format',
+                        'error_description': f'JSON format error: {str(e)}, please check if the file content is valid JSON format'
+                    }), 400
+            else:
+                data = request.get_json()
+                if not data:
+                    return jsonify({
+                        'success': False,
+                        'error': 'No data provided',
+                        'error_description': 'Please provide the JSON data to import'
+                    }), 400
+            
+            if not isinstance(data, dict):
+                return jsonify({
+                    'success': False,
+                    'error': 'Invalid data format',
+                    'error_description': 'The imported data must be a JSON object format'
+                }), 400
+        
+        import_history = ImportHistory(
+            import_mode=mode,
+            status='pending',
+            source=filename or 'direct_input',
+            results='{}'
+        )
+        db.session.add(import_history)
+        db.session.flush()
+        
+        results = {
+            'clients': {'imported': 0, 'skipped': 0, 'errors': [], 'details': []},
+            'scopes': {'imported': 0, 'skipped': 0, 'errors': [], 'details': []},
+            'tokens': {'imported': 0, 'skipped': 0, 'errors': [], 'details': []},
+            'simulated_errors': {'imported': 0, 'skipped': 0, 'errors': [], 'details': []}
+        }
+        
+        has_errors = False
         
         if 'clients' in data:
             for client_data in data['clients']:
@@ -350,9 +578,12 @@ def import_data():
                     if existing:
                         if mode == 'skip':
                             results['clients']['skipped'] += 1
-                            results['clients']['errors'].append(
-                                f"Client {client_data.get('client_id')} ({client_data.get('name')}) already exists, skipped"
-                            )
+                            results['clients']['details'].append({
+                                'client_id': client_data.get('client_id'),
+                                'name': client_data.get('name'),
+                                'action': 'skipped',
+                                'reason': 'already_exists'
+                            })
                             continue
                         elif mode == 'overwrite':
                             existing.name = client_data.get('name', existing.name)
@@ -366,19 +597,25 @@ def import_data():
                             if 'client_secret' in client_data:
                                 existing.client_secret = client_data['client_secret']
                             results['clients']['imported'] += 1
+                            results['clients']['details'].append({
+                                'client_id': client_data.get('client_id'),
+                                'name': client_data.get('name'),
+                                'action': 'overwritten'
+                            })
                             continue
                         else:
                             results['clients']['errors'].append(
                                 f"Client {client_data.get('client_id')} ({client_data.get('name')}) already exists"
                             )
+                            has_errors = True
                             continue
                     
                     client = Client(
                         client_id=client_data.get('client_id'),
-                        client_secret=client_data.get('client_secret'),
+                        client_secret=client_data.get('client_secret') if 'client_secret' in client_data else None,
                         name=client_data['name'],
                         description=client_data.get('description', ''),
-                        redirect_uris=','.join(client_data.get('redirect_uris', [])),
+                        redirect_uris=','.join(client_data['redirect_uris']),
                         grant_types=','.join(client_data.get('grant_types', ['authorization_code', 'client_credentials'])),
                         token_format=client_data.get('token_format', 'jwt'),
                         token_expire_seconds=client_data.get('token_expire_seconds', 3600),
@@ -387,10 +624,19 @@ def import_data():
                     )
                     db.session.add(client)
                     results['clients']['imported'] += 1
+                    results['clients']['details'].append({
+                        'client_id': client_data.get('client_id'),
+                        'name': client_data.get('name'),
+                        'action': 'created'
+                    })
                 except Exception as e:
-                    results['clients']['errors'].append(f"Error importing client {client_data.get('name')}: {str(e)}")
+                    results['clients']['errors'].append(f"Error importing client {client_data.get('client_id')}: {str(e)}")
+                    has_errors = True
         
         db.session.flush()
+        
+        if has_errors and atomic:
+            raise Exception(f"Import failed, found {len(results['clients']['errors'])} errors, all changes have been rolled back")
         
         if 'scopes' in data:
             for scope_data in data['scopes']:
@@ -407,6 +653,7 @@ def import_data():
                             continue
                         else:
                             results['scopes']['errors'].append(f"Scope {scope_data.get('name')} already exists")
+                            has_errors = True
                             continue
                     
                     scope = Scope(
@@ -418,8 +665,12 @@ def import_data():
                     results['scopes']['imported'] += 1
                 except Exception as e:
                     results['scopes']['errors'].append(f"Error importing scope {scope_data.get('name')}: {str(e)}")
+                    has_errors = True
         
         db.session.flush()
+        
+        if has_errors and atomic:
+            raise Exception(f"Import failed, found {len(results['scopes']['errors'])} errors, all changes have been rolled back")
         
         if 'tokens' in data:
             for token_data in data['tokens']:
@@ -436,9 +687,9 @@ def import_data():
                             continue
                         else:
                             results['tokens']['errors'].append(f"Token {token_data.get('id')} already exists")
+                            has_errors = True
                             continue
                     
-                    from datetime import datetime
                     expires_at = token_data.get('expires_at')
                     if isinstance(expires_at, str):
                         expires_at = datetime.fromisoformat(expires_at.replace('Z', '+00:00')).replace(tzinfo=None)
@@ -464,8 +715,12 @@ def import_data():
                     results['tokens']['imported'] += 1
                 except Exception as e:
                     results['tokens']['errors'].append(f"Error importing token: {str(e)}")
+                    has_errors = True
         
         db.session.flush()
+        
+        if has_errors and atomic:
+            raise Exception(f"Import failed, found {len(results['tokens']['errors'])} errors, all changes have been rolled back")
         
         if 'simulated_errors' in data:
             for error_data in data['simulated_errors']:
@@ -486,6 +741,7 @@ def import_data():
                             continue
                         else:
                             results['simulated_errors']['errors'].append(f"Simulated error {error_data.get('name')} already exists")
+                            has_errors = True
                             continue
                     
                     error = SimulatedError(
@@ -501,8 +757,17 @@ def import_data():
                     results['simulated_errors']['imported'] += 1
                 except Exception as e:
                     results['simulated_errors']['errors'].append(f"Error importing simulated error {error_data.get('name')}: {str(e)}")
+                    has_errors = True
+        
+        if has_errors and atomic:
+            raise Exception(f"Import failed, found {len(results['simulated_errors']['errors'])} errors, all changes have been rolled back")
         
         db.session.commit()
+        
+        if import_history:
+            import_history.status = 'completed' if not has_errors else 'completed_with_errors'
+            import_history.set_results(results)
+            db.session.commit()
         
         log_request(
             'data_import',
@@ -513,14 +778,140 @@ def import_data():
         return jsonify({
             'success': True,
             'message': 'Import completed',
-            'results': results
+            'import_id': import_history.id if import_history else None,
+            'results': results,
+            'has_errors': has_errors
         })
         
     except Exception as e:
         db.session.rollback()
+        if import_history:
+            import_history.status = 'failed'
+            import_history.error_message = str(e)
+            db.session.commit()
+        
         log_request(
             'data_import',
             success=False,
             error_message=str(e)
         )
-        return jsonify({'error': f'Import failed: {str(e)}'}), 500
+        return jsonify({
+            'success': False,
+            'error': 'Import failed',
+            'error_description': str(e),
+            'import_id': import_history.id if import_history else None
+        }), 500
+
+@api_bp.route('/import/history', methods=['GET'])
+def get_import_history():
+    try:
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 20))
+        status = request.args.get('status')
+        
+        query = ImportHistory.query.order_by(ImportHistory.created_at.desc())
+        
+        if status:
+            query = query.filter_by(status=status)
+        
+        pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+        
+        return jsonify({
+            'success': True,
+            'data': [h.to_dict() for h in pagination.items],
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total': pagination.total,
+                'pages': pagination.pages,
+                'has_next': pagination.has_next,
+                'has_prev': pagination.has_prev
+            }
+        })
+    except Exception as e:
+        current_app.logger.error(f'Get import history error: {e}')
+        return jsonify({
+            'success': False,
+            'error': 'Failed to get import history',
+            'error_description': str(e)
+        }), 500
+
+@api_bp.route('/import/history/<int:import_id>', methods=['GET'])
+def get_import_history_detail(import_id):
+    try:
+        history = ImportHistory.query.get_or_404(import_id)
+        return jsonify({
+            'success': True,
+            'data': history.to_dict()
+        })
+    except Exception as e:
+        current_app.logger.error(f'Get import history detail error: {e}')
+        return jsonify({
+            'success': False,
+            'error': 'Failed to get import history detail',
+            'error_description': str(e)
+        }), 500
+
+@api_bp.route('/import/history/<int:import_id>/report', methods=['GET'])
+def download_import_report(import_id):
+    try:
+        history = ImportHistory.query.get_or_404(import_id)
+        
+        report = {
+            'report_type': 'import_report',
+            'generated_at': utcnow().isoformat(),
+            'import_id': history.id,
+            'import_mode': history.import_mode,
+            'status': history.status,
+            'source': history.source,
+            'created_at': history.created_at.isoformat(),
+            'results': history.get_results(),
+            'error_message': history.error_message
+        }
+        
+        filename = f'import_report_{history.id}_{history.created_at.strftime("%Y%m%d_%H%M%S")}.json'
+        
+        return Response(
+            json.dumps(report, indent=2, ensure_ascii=False),
+            mimetype='application/json',
+            headers={'Content-Disposition': f'attachment; filename={filename}'}
+        )
+    except Exception as e:
+        current_app.logger.error(f'Download import report error: {e}')
+        return jsonify({
+            'success': False,
+            'error': 'Failed to download import report',
+            'error_description': str(e)
+        }), 500
+
+@api_bp.route('/error-hits', methods=['GET'])
+def get_error_hits():
+    try:
+        endpoint = request.args.get('endpoint')
+        client_id = request.args.get('client_id')
+        simulated_error_id = request.args.get('simulated_error_id')
+        limit = int(request.args.get('limit', 100))
+        
+        query = ErrorHit.query.order_by(ErrorHit.created_at.desc())
+        
+        if endpoint:
+            query = query.filter_by(endpoint=endpoint)
+        if client_id:
+            query = query.filter_by(client_id=client_id)
+        if simulated_error_id:
+            query = query.filter_by(simulated_error_id=int(simulated_error_id))
+        
+        hits = query.limit(limit).all()
+        
+        return jsonify({
+            'success': True,
+            'data': [h.to_dict() for h in hits],
+            'count': len(hits)
+        })
+    except Exception as e:
+        current_app.logger.error(f'Get error hits error: {e}')
+        return jsonify({
+            'success': False,
+            'error': 'Failed to get error hits',
+            'error_description': str(e)
+        }), 500
