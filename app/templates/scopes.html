@@ -1,0 +1,172 @@
+{% extends 'base.html' %}
+
+{% block title %}Scope管理 - OAuth2.0{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Scope 管理</h1>
+    <button class="btn btn-primary" onclick="showNewScopeModal()">+ 创建新Scope</button>
+</div>
+
+<div class="card">
+    <p class="text-muted">Scope定义了客户端可以请求的权限范围。用户在授权时会看到这些Scope的描述。</p>
+</div>
+
+{% if scopes %}
+    <div class="table-container">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Scope名称</th>
+                    <th>描述</th>
+                    <th>状态</th>
+                    <th>创建时间</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for scope in scopes %}
+                    <tr>
+                        <td><code class="code-inline">{{ scope.name }}</code></td>
+                        <td>{{ scope.description }}</td>
+                        <td>
+                            <span class="tag tag-{{ 'success' if scope.is_enabled else 'danger' }}">
+                                {{ '启用' if scope.is_enabled else '禁用' }}
+                            </span>
+                        </td>
+                        <td>{{ scope.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                        <td class="action-cell">
+                            <button class="btn btn-sm btn-secondary" onclick="editScope({{ scope.id }})">编辑</button>
+                            <button class="btn btn-sm btn-warning" onclick="toggleScope({{ scope.id }})">
+                                {{ '禁用' if scope.is_enabled else '启用' }}
+                            </button>
+                            <button class="btn btn-sm btn-danger" onclick="deleteScope({{ scope.id }})">删除</button>
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+{% else %}
+    <div class="empty-state">
+        <p>还没有定义任何Scope</p>
+        <button class="btn btn-primary" onclick="showNewScopeModal()">创建第一个Scope</button>
+    </div>
+{% endif %}
+
+<div id="scopeModal" class="modal" style="display: none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="modalTitle">创建Scope</h3>
+            <button class="close" onclick="closeModal()">&times;</button>
+        </div>
+        <form id="scopeForm">
+            <input type="hidden" id="scopeId">
+            <div class="form-group">
+                <label for="scopeName">Scope名称 *</label>
+                <input type="text" id="scopeName" name="name" class="form-control" 
+                       placeholder="例如：read:user" required>
+            </div>
+            <div class="form-group">
+                <label for="scopeDescription">描述</label>
+                <textarea id="scopeDescription" name="description" class="form-control" rows="2"
+                          placeholder="描述这个Scope的权限含义"></textarea>
+            </div>
+            <div class="form-group">
+                <label class="checkbox-item">
+                    <input type="checkbox" id="scopeEnabled" name="is_enabled" value="1" checked>
+                    <span>启用此Scope</span>
+                </label>
+            </div>
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">保存</button>
+                <button type="button" class="btn btn-secondary" onclick="closeModal()">取消</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function showNewScopeModal() {
+    document.getElementById('modalTitle').textContent = '创建Scope';
+    document.getElementById('scopeId').value = '';
+    document.getElementById('scopeName').value = '';
+    document.getElementById('scopeDescription').value = '';
+    document.getElementById('scopeEnabled').checked = true;
+    document.getElementById('scopeModal').style.display = 'block';
+}
+
+function editScope(id) {
+    fetch(`/api/scopes`)
+        .then(r => r.json())
+        .then(scopes => {
+            const scope = scopes.find(s => s.id === id);
+            if (scope) {
+                document.getElementById('modalTitle').textContent = '编辑Scope';
+                document.getElementById('scopeId').value = scope.id;
+                document.getElementById('scopeName').value = scope.name;
+                document.getElementById('scopeDescription').value = scope.description;
+                document.getElementById('scopeEnabled').checked = scope.is_enabled;
+                document.getElementById('scopeModal').style.display = 'block';
+            }
+        });
+}
+
+function closeModal() {
+    document.getElementById('scopeModal').style.display = 'none';
+}
+
+document.getElementById('scopeForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const id = document.getElementById('scopeId').value;
+    const data = {
+        name: document.getElementById('scopeName').value,
+        description: document.getElementById('scopeDescription').value,
+        is_enabled: document.getElementById('scopeEnabled').checked
+    };
+    
+    const method = id ? 'PUT' : 'POST';
+    const url = id ? `/api/scopes/${id}` : '/api/scopes';
+    
+    fetch(url, {
+        method: method,
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+    }).then(r => {
+        if (r.ok) {
+            window.location.reload();
+        } else {
+            r.json().then(err => alert('保存失败: ' + (err.error || '未知错误')));
+        }
+    });
+});
+
+function toggleScope(id) {
+    fetch(`/api/scopes`)
+        .then(r => r.json())
+        .then(scopes => {
+            const scope = scopes.find(s => s.id === id);
+            if (scope) {
+                fetch(`/api/scopes/${id}`, {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({is_enabled: !scope.is_enabled})
+                }).then(r => {
+                    if (r.ok) window.location.reload();
+                });
+            }
+        });
+}
+
+function deleteScope(id) {
+    if (confirm('确定要删除这个Scope吗？')) {
+        fetch(`/api/scopes/${id}`, {method: 'DELETE'})
+            .then(r => {
+                if (r.ok) window.location.reload();
+            });
+    }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,132 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ client.name }} - 客户端详情{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>{{ client.name }}</h1>
+    <div>
+        <a href="{{ url_for('main.edit_client', client_id=client.id) }}" class="btn btn-secondary">编辑</a>
+        <a href="{{ url_for('main.clients') }}" class="btn btn-outline">返回列表</a>
+    </div>
+</div>
+
+<div class="grid-2">
+    <div class="card">
+        <h2>基本信息</h2>
+        <div class="info-group">
+            <label>Client ID</label>
+            <div class="code-block">{{ client.client_id }}</div>
+        </div>
+        <div class="info-group">
+            <label>Client Secret</label>
+            <div class="code-block">{{ client.client_secret }}</div>
+        </div>
+        <div class="info-group">
+            <label>描述</label>
+            <p>{{ client.description or '无' }}</p>
+        </div>
+        <div class="info-group">
+            <label>状态</label>
+            <span class="tag tag-{{ 'success' if client.is_active else 'danger' }}">
+                {{ '活跃' if client.is_active else '禁用' }}
+            </span>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h2>OAuth 配置</h2>
+        <div class="info-group">
+            <label>重定向 URI</label>
+            <ul>
+                {% for uri in client.get_redirect_uris() %}
+                    <li><code class="code-inline">{{ uri }}</code></li>
+                {% endfor %}
+            </ul>
+        </div>
+        <div class="info-group">
+            <label>授权类型</label>
+            <div>
+                {% for gt in client.get_grant_types() %}
+                    <span class="tag tag-info">{{ gt }}</span>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="info-group">
+            <label>令牌格式</label>
+            <span class="tag tag-primary">{{ client.token_format }}</span>
+        </div>
+        <div class="info-group">
+            <label>令牌过期时间</label>
+            <p>{{ client.token_expire_seconds }}秒 ({{ client.token_expire_seconds // 3600 }}小时)</p>
+        </div>
+        <div class="info-group">
+            <label>需要用户确认</label>
+            <span class="tag tag-{{ 'warning' if client.require_consent else 'info' }}">
+                {{ '是' if client.require_consent else '否' }}
+            </span>
+        </div>
+        <div class="info-group">
+            <label>创建时间</label>
+            <p>{{ client.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</p>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="section-header">
+        <h2>相关令牌</h2>
+        <a href="{{ url_for('admin.tokens', client_id=client.client_id) }}" class="btn-link">查看全部 →</a>
+    </div>
+    {% if tokens %}
+        <div class="table-container">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>令牌类型</th>
+                        <th>用户</th>
+                        <th>Scope</th>
+                        <th>授权类型</th>
+                        <th>状态</th>
+                        <th>过期时间</th>
+                        <th>创建时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for token in tokens %}
+                        <tr>
+                            <td>{{ token.token_format }}</td>
+                            <td>{{ token.user_id or '-' }}</td>
+                            <td>{{ token.scope or '-' }}</td>
+                            <td><span class="tag tag-info">{{ token.grant_type }}</span></td>
+                            <td>
+                                {% if token.is_revoked %}
+                                    <span class="tag tag-danger">已撤销</span>
+                                {% elif token.is_expired() %}
+                                    <span class="tag tag-warning">已过期</span>
+                                {% else %}
+                                    <span class="tag tag-success">活跃</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ token.expires_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                            <td>{{ token.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                            <td>
+                                {% if not token.is_revoked %}
+                                    <form method="POST" action="{{ url_for('admin.revoke_token', token_id=token.id) }}" style="display: inline;">
+                                        <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('确定要撤销这个令牌吗？')">撤销</button>
+                                    </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="empty-state">
+            <p>暂无相关令牌</p>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

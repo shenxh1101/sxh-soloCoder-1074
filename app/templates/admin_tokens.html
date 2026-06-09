@@ -1,0 +1,192 @@
+{% extends 'base.html' %}
+
+{% block title %}令牌管理 - OAuth2.0{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>令牌管理</h1>
+    <div>
+        <form method="POST" action="{{ url_for('admin.revoke_all_tokens') }}" 
+              style="display: inline;"
+              onsubmit="return confirm('确定要撤销所有活跃令牌吗？此操作不可恢复。')">
+            <input type="hidden" name="client_id" value="{{ filter_client }}">
+            <button type="submit" class="btn btn-danger">撤销全部 {{ filter_status }} 令牌</button>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="filter-bar">
+        <form method="GET" class="filter-form">
+            <div class="form-group">
+                <label for="client_id">客户端</label>
+                <select name="client_id" id="client_id" class="form-control" onchange="this.form.submit()">
+                    <option value="">-- 所有客户端 --</option>
+                    {% for client in clients %}
+                        <option value="{{ client.client_id }}" 
+                                {{ 'selected' if filter_client == client.client_id else '' }}>
+                            {{ client.name }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="status">状态</label>
+                <select name="status" id="status" class="form-control" onchange="this.form.submit()">
+                    <option value="all" {{ 'selected' if filter_status == 'all' else '' }}>全部</option>
+                    <option value="active" {{ 'selected' if filter_status == 'active' else '' }}>活跃</option>
+                    <option value="revoked" {{ 'selected' if filter_status == 'revoked' else '' }}>已撤销</option>
+                    <option value="expired" {{ 'selected' if filter_status == 'expired' else '' }}>已过期</option>
+                </select>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if tokens %}
+    <div class="table-container">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>客户端</th>
+                    <th>用户</th>
+                    <th>授权类型</th>
+                    <th>令牌格式</th>
+                    <th>Scope</th>
+                    <th>状态</th>
+                    <th>创建时间</th>
+                    <th>过期时间</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for token in tokens %}
+                    <tr>
+                        <td>{{ token.id }}</td>
+                        <td>
+                            {% if token.client_id in client_map %}
+                                {{ client_map[token.client_id] }}
+                            {% else %}
+                                <code class="code-inline">{{ token.client_id[:15] }}...</code>
+                            {% endif %}
+                        </td>
+                        <td>{{ token.user_id or '-' }}</td>
+                        <td><span class="tag tag-info">{{ token.grant_type }}</span></td>
+                        <td><span class="tag tag-primary">{{ token.token_format }}</span></td>
+                        <td>{{ token.scope or '-' }}</td>
+                        <td>
+                            {% if token.is_revoked %}
+                                <span class="tag tag-danger">已撤销</span>
+                            {% elif token.is_expired() %}
+                                <span class="tag tag-warning">已过期</span>
+                            {% else %}
+                                <span class="tag tag-success">活跃</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ token.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                        <td>{{ token.expires_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                        <td class="action-cell">
+                            {% if not token.is_revoked %}
+                                <form method="POST" action="{{ url_for('admin.revoke_token', token_id=token.id) }}" style="display: inline;">
+                                    <button type="submit" class="btn btn-sm btn-danger" 
+                                            onclick="return confirm('确定要撤销这个令牌吗？')">撤销</button>
+                                </form>
+                            {% endif %}
+                            <button class="btn btn-sm btn-secondary" onclick="showTokenDetails({{ token.id }})">详情</button>
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    
+    <div class="stats-summary">
+        <p>共 {{ tokens|length }} 个令牌，其中活跃 {{ tokens|selectattr('is_active')|list|length }} 个，
+           已撤销 {{ tokens|selectattr('is_revoked')|list|length }} 个，
+           已过期 {{ tokens|rejectattr('is_revoked')|selectattr('is_expired')|list|length }} 个</p>
+    </div>
+{% else %}
+    <div class="empty-state">
+        <p>暂无符合条件的令牌</p>
+    </div>
+{% endif %}
+
+<div id="tokenModal" class="modal" style="display: none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>令牌详情</h3>
+            <button class="close" onclick="closeModal()">&times;</button>
+        </div>
+        <div id="tokenDetails">
+            <p class="text-muted">加载中...</p>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function showTokenDetails(id) {
+    fetch(`/api/tokens`)
+        .then(r => r.json())
+        .then(tokens => {
+            const token = tokens.find(t => t.id === id);
+            if (token) {
+                let html = `
+                    <div class="info-group">
+                        <label>Access Token</label>
+                        <div class="code-block">${token.access_token || 'N/A'}</div>
+                    </div>
+                    <div class="info-group">
+                        <label>Refresh Token</label>
+                        <div class="code-block">${token.refresh_token || 'N/A'}</div>
+                    </div>
+                    <div class="info-group">
+                        <label>客户端ID</label>
+                        <div class="code-block">${token.client_id}</div>
+                    </div>
+                    <div class="info-group">
+                        <label>用户ID</label>
+                        <p>${token.user_id || 'N/A'}</p>
+                    </div>
+                    <div class="info-group">
+                        <label>授权类型</label>
+                        <p>${token.grant_type}</p>
+                    </div>
+                    <div class="info-group">
+                        <label>令牌格式</label>
+                        <p>${token.token_format}</p>
+                    </div>
+                    <div class="info-group">
+                        <label>Scope</label>
+                        <p>${token.scope.join(', ') || 'N/A'}</p>
+                    </div>
+                    <div class="info-group">
+                        <label>状态</label>
+                        <p>
+                            ${token.is_revoked ? '<span class="tag tag-danger">已撤销</span>' :
+                              token.is_active ? '<span class="tag tag-success">活跃</span>' :
+                              '<span class="tag tag-warning">已过期</span>'}
+                        </p>
+                    </div>
+                    <div class="info-group">
+                        <label>创建时间</label>
+                        <p>${token.created_at}</p>
+                    </div>
+                    <div class="info-group">
+                        <label>过期时间</label>
+                        <p>${token.expires_at}</p>
+                    </div>
+                `;
+                document.getElementById('tokenDetails').innerHTML = html;
+                document.getElementById('tokenModal').style.display = 'block';
+            }
+        });
+}
+
+function closeModal() {
+    document.getElementById('tokenModal').style.display = 'none';
+}
+</script>
+{% endblock %}

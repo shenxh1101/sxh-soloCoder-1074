@@ -1,0 +1,86 @@
+{% extends 'base.html' %}
+
+{% block title %}客户端管理 - OAuth2.0{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>客户端管理</h1>
+    <a href="{{ url_for('main.new_client') }}" class="btn btn-primary">+ 创建新客户端</a>
+</div>
+
+{% if clients %}
+    <div class="table-container">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>名称</th>
+                    <th>Client ID</th>
+                    <th>授权类型</th>
+                    <th>令牌格式</th>
+                    <th>过期时间</th>
+                    <th>状态</th>
+                    <th>创建时间</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for client in clients %}
+                    <tr>
+                        <td>
+                            <strong>{{ client.name }}</strong>
+                            {% if client.description %}
+                                <br><small class="text-muted">{{ client.description[:50] }}...</small>
+                            {% endif %}
+                        </td>
+                        <td><code class="code-inline">{{ client.client_id[:20] }}...</code></td>
+                        <td>
+                            {% for gt in client.get_grant_types() %}
+                                <span class="tag tag-info">{{ gt }}</span>
+                            {% endfor %}
+                        </td>
+                        <td><span class="tag tag-primary">{{ client.token_format }}</span></td>
+                        <td>{{ client.token_expire_seconds }}秒</td>
+                        <td>
+                            <span class="tag tag-{{ 'success' if client.is_active else 'danger' }}">
+                                {{ '活跃' if client.is_active else '禁用' }}
+                            </span>
+                        </td>
+                        <td>{{ client.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                        <td class="action-cell">
+                            <a href="{{ url_for('main.client_detail', client_id=client.id) }}" class="btn btn-sm btn-info">详情</a>
+                            <a href="{{ url_for('main.edit_client', client_id=client.id) }}" class="btn btn-sm btn-secondary">编辑</a>
+                            <button class="btn btn-sm btn-danger" onclick="deleteClient({{ client.id }})">删除</button>
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+{% else %}
+    <div class="empty-state">
+        <p>还没有创建任何客户端</p>
+        <a href="{{ url_for('main.new_client') }}" class="btn btn-primary">创建第一个客户端</a>
+    </div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function deleteClient(id) {
+    if (confirm('确定要删除这个客户端吗？相关的令牌和授权码也会被删除。')) {
+        fetch(`/api/clients/${id}`, {
+            method: 'DELETE',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        }).then(response => {
+            if (response.ok) {
+                window.location.reload();
+            } else {
+                alert('删除失败');
+            }
+        });
+    }
+}
+</script>
+{% endblock %}

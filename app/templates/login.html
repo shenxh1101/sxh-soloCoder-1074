@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - OAuth2.0 授权服务器</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0;
+            padding: 20px;
+        }
+        .login-container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+            max-width: 400px;
+            width: 100%;
+        }
+        .login-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .login-header h1 {
+            color: #333;
+            margin: 0 0 10px;
+            font-size: 24px;
+        }
+        .login-header p {
+            color: #666;
+            margin: 0;
+            font-size: 14px;
+        }
+        .login-icon {
+            width: 64px;
+            height: 64px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            color: white;
+            font-size: 28px;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-header">
+            <div class="login-icon">🔐</div>
+            <h1>OAuth2.0 授权服务器</h1>
+            <p>请输入任意用户名继续</p>
+        </div>
+        
+        {% if error %}
+            <div class="alert alert-danger">{{ error }}</div>
+        {% endif %}
+        
+        <form method="POST" class="login-form">
+            <div class="form-group">
+                <label for="username">用户名</label>
+                <input type="text" id="username" name="username" 
+                       class="form-control" 
+                       placeholder="请输入任意用户名" 
+                       autofocus
+                       autocomplete="username">
+                <small class="form-text text-muted">提示：这是模拟登录，输入任意用户名即可</small>
+            </div>
+            
+            <button type="submit" class="btn btn-primary btn-block">登录并继续</button>
+        </form>
+        
+        <div class="login-footer">
+            <p style="text-align: center; margin-top: 20px; color: #999; font-size: 12px;">
+                这是一个用于开发和测试的模拟OAuth2.0服务器
+            </p>
+        </div>
+    </div>
+</body>
+</html>

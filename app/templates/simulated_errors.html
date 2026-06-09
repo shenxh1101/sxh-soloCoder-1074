@@ -1,0 +1,64 @@
+{% extends 'base.html' %}
+
+{% block title %}模拟错误管理 - OAuth2.0{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>模拟错误管理</h1>
+    <div>
+        <form method="POST" action="{{ url_for('admin.init_simulated_errors') }}" style="display: inline;">
+            <button type="submit" class="btn btn-secondary">初始化预设错误</button>
+        </form>
+        <a href="{{ url_for('admin.new_simulated_error') }}" class="btn btn-primary">+ 创建错误</a>
+    </div>
+</div>
+
+<div class="card">
+    <p class="text-muted">
+        通过启用模拟错误，你可以测试客户端在各种错误场景下的处理逻辑。
+        启用的错误会在对应的OAuth2.0端点返回预设的错误响应。
+    </p>
+</div>
+
+{% if errors %}
+    <div class="error-grid">
+        {% for error in errors %}
+            <div class="error-card {% if error.enabled %}enabled{% endif %}">
+                <div class="error-header">
+                    <h3>{{ error.name }}</h3>
+                    <form method="POST" action="{{ url_for('admin.toggle_simulated_error', error_id=error.id) }}" style="display: inline;">
+                        <button type="submit" class="btn btn-sm {% if error.enabled %}btn-warning{% else %}btn-success{% endif %}">
+                            {{ '禁用' if error.enabled else '启用' }}
+                        </button>
+                    </form>
+                </div>
+                <p class="text-muted">{{ error.description }}</p>
+                <div class="error-details">
+                    <span class="tag tag-danger">{{ error.error_type }}</span>
+                    <span class="tag tag-info">{{ error.status_code }}</span>
+                </div>
+                {% if error.error_message %}
+                    <p class="error-message">{{ error.error_message }}</p>
+                {% endif %}
+                <div class="error-actions">
+                    <a href="{{ url_for('admin.edit_simulated_error', error_id=error.id) }}" class="btn btn-sm btn-secondary">编辑</a>
+                    <form method="POST" action="{{ url_for('admin.delete_simulated_error', error_id=error.id) }}" 
+                          style="display: inline;"
+                          onsubmit="return confirm('确定要删除这个错误配置吗？')">
+                        <button type="submit" class="btn btn-sm btn-danger">删除</button>
+                    </form>
+                </div>
+            </div>
+        {% endfor %}
+    </div>
+{% else %}
+    <div class="empty-state">
+        <p>暂无模拟错误配置</p>
+        <form method="POST" action="{{ url_for('admin.init_simulated_errors') }}">
+            <button type="submit" class="btn btn-primary">初始化预设错误</button>
+        </form>
+        <p style="margin-top: 10px;">或</p>
+        <a href="{{ url_for('admin.new_simulated_error') }}" class="btn btn-secondary">创建自定义错误</a>
+    </div>
+{% endif %}
+{% endblock %}

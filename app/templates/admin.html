@@ -1,0 +1,155 @@
+{% extends 'base.html' %}
+
+{% block title %}管理面板 - OAuth2.0{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>管理面板</h1>
+</div>
+
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-value">{{ tokens|length }}</div>
+        <div class="stat-label">令牌总数</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ active_tokens|length }}</div>
+        <div class="stat-label">活跃令牌</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ clients|length }}</div>
+        <div class="stat-label">客户端数</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ simulated_errors|length }}</div>
+        <div class="stat-label">模拟错误配置</div>
+    </div>
+</div>
+
+<div class="grid-2">
+    <div class="card">
+        <div class="section-header">
+            <h2>快速操作</h2>
+        </div>
+        <div class="action-buttons">
+            <a href="{{ url_for('admin.tokens') }}" class="btn btn-primary btn-block">管理令牌</a>
+            <a href="{{ url_for('admin.simulated_errors') }}" class="btn btn-warning btn-block">管理模拟错误</a>
+            <a href="{{ url_for('api.export_all') }}" class="btn btn-info btn-block">导出全部数据</a>
+            <a href="{{ url_for('api.export_clients') }}" class="btn btn-secondary btn-block">导出客户端配置</a>
+            <a href="{{ url_for('api.export_tokens') }}" class="btn btn-secondary btn-block">导出令牌数据</a>
+        </div>
+    </div>
+    
+    <div class="card">
+        <div class="section-header">
+            <h2>批量操作</h2>
+        </div>
+        <form method="POST" action="{{ url_for('admin.revoke_all_tokens') }}" 
+              onsubmit="return confirm('确定要撤销所有活跃令牌吗？此操作不可恢复。')">
+            <div class="form-group">
+                <label for="client_id">选择客户端（可选，留空则撤销所有）</label>
+                <select name="client_id" class="form-control">
+                    <option value="">-- 所有客户端 --</option>
+                    {% for client in clients %}
+                        <option value="{{ client.client_id }}">{{ client.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button type="submit" class="btn btn-danger btn-block">批量撤销令牌</button>
+        </form>
+        
+        <div style="margin-top: 20px;">
+            <form method="POST" action="{{ url_for('admin.init_simulated_errors') }}">
+                <button type="submit" class="btn btn-secondary btn-block">
+                    初始化预设模拟错误
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="section-header">
+        <h2>最近令牌</h2>
+        <a href="{{ url_for('admin.tokens') }}" class="btn-link">查看全部 →</a>
+    </div>
+    {% if tokens %}
+        <div class="table-container">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>客户端</th>
+                        <th>用户</th>
+                        <th>授权类型</th>
+                        <th>格式</th>
+                        <th>状态</th>
+                        <th>过期时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for token in tokens[:10] %}
+                        <tr>
+                            <td>{{ client_names[token.client_id] if client_names else token.client_id[:15] }}</td>
+                            <td>{{ token.user_id or '-' }}</td>
+                            <td><span class="tag tag-info">{{ token.grant_type }}</span></td>
+                            <td>{{ token.token_format }}</td>
+                            <td>
+                                {% if token.is_revoked %}
+                                    <span class="tag tag-danger">已撤销</span>
+                                {% elif token.is_expired() %}
+                                    <span class="tag tag-warning">已过期</span>
+                                {% else %}
+                                    <span class="tag tag-success">活跃</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ token.expires_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                            <td>
+                                {% if not token.is_revoked %}
+                                    <form method="POST" action="{{ url_for('admin.revoke_token', token_id=token.id) }}" style="display: inline;">
+                                        <button type="submit" class="btn btn-sm btn-danger" 
+                                                onclick="return confirm('确定要撤销这个令牌吗？')">撤销</button>
+                                    </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="empty-state">
+            <p>暂无令牌记录</p>
+        </div>
+    {% endif %}
+</div>
+
+<div class="card">
+    <div class="section-header">
+        <h2>已启用的模拟错误</h2>
+        <a href="{{ url_for('admin.simulated_errors') }}" class="btn-link">管理 →</a>
+    </div>
+    {% if simulated_errors %}
+        <div class="error-list">
+            {% for error in simulated_errors %}
+                <div class="error-item {% if error.enabled %}enabled{% endif %}">
+                    <div>
+                        <strong>{{ error.name }}</strong>
+                        <span class="tag tag-{{ 'danger' if error.enabled else 'secondary' }}">
+                            {{ '已启用' if error.enabled else '已禁用' }}
+                        </span>
+                    </div>
+                    <small class="text-muted">{{ error.error_type }} - {{ error.status_code }}</small>
+                </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <div class="empty-state">
+            <p>暂无模拟错误配置</p>
+            <form method="POST" action="{{ url_for('admin.init_simulated_errors') }}">
+                <button type="submit" class="btn btn-primary">初始化预设错误</button>
+            </form>
+        </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,61 @@
+{% extends 'base.html' %}
+
+{% block title %}操作日志 - OAuth2.0{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>操作日志</h1>
+    <button class="btn btn-secondary" onclick="window.location.reload()">刷新</button>
+</div>
+
+{% if logs %}
+    <div class="table-container">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>时间</th>
+                    <th>类型</th>
+                    <th>端点</th>
+                    <th>方法</th>
+                    <th>客户端</th>
+                    <th>用户</th>
+                    <th>授权类型</th>
+                    <th>状态</th>
+                    <th>IP</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in logs %}
+                    <tr>
+                        <td>{{ log.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                        <td>
+                            <span class="tag tag-{{ 'success' if log.success else 'danger' }}">
+                                {{ log.type }}
+                            </span>
+                        </td>
+                        <td><code class="code-inline">{{ log.endpoint }}</code></td>
+                        <td>
+                            <span class="method method-{{ log.method.lower() }}">{{ log.method }}</span>
+                        </td>
+                        <td>{{ log.client_id[:15] + '...' if log.client_id and log.client_id|length > 15 else log.client_id or '-' }}</td>
+                        <td>{{ log.user_id or '-' }}</td>
+                        <td>{{ log.grant_type or '-' }}</td>
+                        <td>
+                            {% if log.success %}
+                                <span class="tag tag-success">成功</span>
+                            {% else %}
+                                <span class="tag tag-danger" title="{{ log.error_message }}">失败</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ log.ip_address }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+{% else %}
+    <div class="empty-state">
+        <p>暂无日志记录</p>
+    </div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,167 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ '编辑' if client else '创建' }}客户端 - OAuth2.0{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>{{ '编辑' if client else '创建' }}客户端</h1>
+    <a href="{{ url_for('main.clients') }}" class="btn btn-outline">返回列表</a>
+</div>
+
+<div class="card">
+    <form id="clientForm" method="POST">
+        <div class="form-group">
+            <label for="name">客户端名称 *</label>
+            <input type="text" id="name" name="name" class="form-control" 
+                   value="{{ client.name if client else '' }}" required
+                   placeholder="例如：我的Web应用">
+        </div>
+        
+        <div class="form-group">
+            <label for="description">描述</label>
+            <textarea id="description" name="description" class="form-control" rows="3"
+                      placeholder="描述这个客户端的用途">{{ client.description if client else '' }}</textarea>
+        </div>
+        
+        <div class="form-group">
+            <label for="redirect_uris">重定向 URI *</label>
+            <textarea id="redirect_uris" name="redirect_uris" class="form-control" rows="3" required
+                      placeholder="每行一个URI，例如：&#10;http://localhost:3000/callback&#10;http://localhost:8080/auth/callback">{{ '\n'.join(client.get_redirect_uris()) if client else '' }}</textarea>
+            <small class="form-text text-muted">多个URI请用逗号分隔或每行一个。授权成功后将重定向到这些地址之一。</small>
+        </div>
+        
+        <div class="form-group">
+            <label>授权类型</label>
+            <div class="checkbox-group">
+                {% set grant_types = client.get_grant_types() if client else ['authorization_code', 'client_credentials'] %}
+                <label class="checkbox-item">
+                    <input type="checkbox" name="grant_types" value="authorization_code" 
+                           {{ 'checked' if 'authorization_code' in grant_types else '' }}>
+                    <span>授权码模式 (Authorization Code)</span>
+                </label>
+                <label class="checkbox-item">
+                    <input type="checkbox" name="grant_types" value="client_credentials"
+                           {{ 'checked' if 'client_credentials' in grant_types else '' }}>
+                    <span>客户端凭证模式 (Client Credentials)</span>
+                </label>
+                <label class="checkbox-item">
+                    <input type="checkbox" name="grant_types" value="refresh_token"
+                           {{ 'checked' if 'refresh_token' in grant_types else '' }}>
+                    <span>刷新令牌 (Refresh Token)</span>
+                </label>
+            </div>
+        </div>
+        
+        <div class="form-group">
+            <label for="token_format">令牌格式</label>
+            <select id="token_format" name="token_format" class="form-control">
+                <option value="jwt" {{ 'selected' if client and client.token_format == 'jwt' else '' }}>JWT (JSON Web Token)</option>
+                <option value="random" {{ 'selected' if client and client.token_format == 'random' else '' }}>随机字符串</option>
+            </select>
+        </div>
+        
+        <div class="form-group">
+            <label for="token_expire_seconds">令牌过期时间（秒）</label>
+            <input type="number" id="token_expire_seconds" name="token_expire_seconds" 
+                   class="form-control" min="60" max="31536000"
+                   value="{{ client.token_expire_seconds if client else 3600 }}">
+            <small class="form-text text-muted">默认3600秒（1小时），支持60秒到1年</small>
+        </div>
+        
+        <div class="form-group">
+            <label class="checkbox-item">
+                <input type="checkbox" name="require_consent" value="1"
+                       {{ 'checked' if not client or client.require_consent else '' }}>
+                <span>需要用户授权确认</span>
+            </label>
+        </div>
+        
+        {% if client %}
+        <div class="form-group">
+            <label class="checkbox-item">
+                <input type="checkbox" name="is_active" value="1"
+                       {{ 'checked' if client.is_active else '' }}>
+                <span>客户端状态（启用/禁用）</span>
+            </label>
+        </div>
+        {% endif %}
+        
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary">
+                {{ '保存修改' if client else '创建客户端' }}
+            </button>
+            <a href="{{ url_for('main.clients') }}" class="btn btn-secondary">取消</a>
+        </div>
+    </form>
+</div>
+
+{% if client %}
+<div class="card">
+    <h2>客户端凭证</h2>
+    <p class="text-muted">这些凭证是自动生成的，请妥善保存。</p>
+    
+    <div class="info-group">
+        <label>Client ID</label>
+        <div class="code-block">{{ client.client_id }}</div>
+    </div>
+    
+    <div class="info-group">
+        <label>Client Secret</label>
+        <div class="code-block">{{ client.client_secret }}</div>
+    </div>
+    
+    <div class="info-group">
+        <label>测试授权URL</label>
+        <div class="code-block">
+            /oauth/authorize?response_type=code&client_id={{ client.client_id }}&redirect_uri={{ client.get_redirect_uris()[0] }}&scope=read:user%20write:data&state=random_state
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('clientForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    
+    const formData = new FormData(this);
+    const data = {
+        name: formData.get('name'),
+        description: formData.get('description') || '',
+        redirect_uris: formData.get('redirect_uris').split(/[\n,]+/).map(s => s.trim()).filter(s => s),
+        grant_types: formData.getAll('grant_types'),
+        token_format: formData.get('token_format'),
+        token_expire_seconds: parseInt(formData.get('token_expire_seconds')),
+        require_consent: formData.get('require_consent') === '1'
+    };
+    
+    {% if client %}
+    if (formData.get('is_active') !== null) {
+        data.is_active = formData.get('is_active') === '1';
+    }
+    {% endif %}
+    
+    const method = '{{ 'PUT' if client else 'POST' }}';
+    const url = '{{ '/api/clients/' + client.id|string if client else '/api/clients' }}';
+    
+    fetch(url, {
+        method: method,
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(data)
+    }).then(response => {
+        if (response.ok) {
+            window.location.href = '{{ url_for('main.clients') }}';
+        } else {
+            response.json().then(err => {
+                alert('保存失败: ' + (err.error || '未知错误'));
+            });
+        }
+    }).catch(err => {
+        alert('请求失败: ' + err.message);
+    });
+});
+</script>
+{% endblock %}

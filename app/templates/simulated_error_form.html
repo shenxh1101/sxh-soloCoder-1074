@@ -1,0 +1,126 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ '编辑' if error else '创建' }}模拟错误 - OAuth2.0{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>{{ '编辑' if error else '创建' }}模拟错误</h1>
+    <a href="{{ url_for('admin.simulated_errors') }}" class="btn btn-outline">返回列表</a>
+</div>
+
+<div class="card">
+    <form method="POST">
+        <div class="form-group">
+            <label for="name">错误名称 *</label>
+            <input type="text" id="name" name="name" class="form-control" 
+                   value="{{ error.name if error else '' }}" required
+                   placeholder="例如：令牌过期">
+        </div>
+        
+        <div class="form-group">
+            <label for="description">描述</label>
+            <textarea id="description" name="description" class="form-control" rows="2"
+                      placeholder="描述这个错误模拟的场景">{{ error.description if error else '' }}</textarea>
+        </div>
+        
+        <div class="form-group">
+            <label for="error_type">错误类型 *</label>
+            <select id="error_type" name="error_type" class="form-control" required>
+                {% for value, label in error_types %}
+                    <option value="{{ value }}" 
+                            {{ 'selected' if error and error.error_type == value else '' }}>
+                        {{ label }}
+                    </option>
+                {% endfor %}
+            </select>
+        </div>
+        
+        <div class="form-group">
+            <label for="status_code">HTTP状态码</label>
+            <input type="number" id="status_code" name="status_code" 
+                   class="form-control" min="400" max="599"
+                   value="{{ error.status_code if error else 400 }}">
+        </div>
+        
+        <div class="form-group">
+            <label for="error_message">错误消息</label>
+            <input type="text" id="error_message" name="error_message" 
+                   class="form-control"
+                   value="{{ error.error_message if error else '' }}"
+                   placeholder="例如：令牌已过期">
+        </div>
+        
+        {% if error %}
+        <div class="form-group">
+            <label class="checkbox-item">
+                <input type="checkbox" name="enabled" value="1"
+                       {{ 'checked' if error.enabled else '' }}>
+                <span>立即启用此错误</span>
+            </label>
+        </div>
+        {% endif %}
+        
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary">
+                {{ '保存修改' if error else '创建错误' }}
+            </button>
+            <a href="{{ url_for('admin.simulated_errors') }}" class="btn btn-secondary">取消</a>
+        </div>
+    </form>
+</div>
+
+<div class="card">
+    <h2>错误类型说明</h2>
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>错误类型</th>
+                <th>影响端点</th>
+                <th>说明</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>invalid_request</code></td>
+                <td>/oauth/authorize</td>
+                <td>授权请求参数无效</td>
+            </tr>
+            <tr>
+                <td><code>invalid_client</code></td>
+                <td>/oauth/token, /oauth/introspect</td>
+                <td>客户端认证失败</td>
+            </tr>
+            <tr>
+                <td><code>invalid_grant</code></td>
+                <td>/oauth/token</td>
+                <td>授权码或刷新令牌无效</td>
+            </tr>
+            <tr>
+                <td><code>invalid_scope</code></td>
+                <td>/oauth/authorize, /oauth/token</td>
+                <td>请求的Scope无效</td>
+            </tr>
+            <tr>
+                <td><code>access_denied</code></td>
+                <td>/oauth/authorize</td>
+                <td>用户拒绝授权</td>
+            </tr>
+            <tr>
+                <td><code>invalid_token</code></td>
+                <td>/oauth/introspect</td>
+                <td>令牌验证失败</td>
+            </tr>
+            <tr>
+                <td><code>insufficient_scope</code></td>
+                <td>资源验证</td>
+                <td>令牌Scope不足</td>
+            </tr>
+            <tr>
+                <td><code>server_error</code></td>
+                <td>所有端点</td>
+                <td>服务器内部错误</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+{% endblock %}

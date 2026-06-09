@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>授权确认 - OAuth2.0</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0;
+            padding: 20px;
+        }
+        .authorize-container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+        }
+        .authorize-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .client-logo {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            color: white;
+            font-size: 36px;
+        }
+        .scope-list {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .scope-item {
+            display: flex;
+            align-items: center;
+            padding: 8px 0;
+        }
+        .scope-item::before {
+            content: '✓';
+            color: #28a745;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+        .user-info {
+            background: #e7f3ff;
+            border-radius: 8px;
+            padding: 12px;
+            margin: 20px 0;
+            text-align: center;
+        }
+        .action-buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="authorize-container">
+        <div class="authorize-header">
+            <div class="client-logo">🔑</div>
+            <h1 style="margin: 0 0 10px; color: #333;">{{ client.name }}</h1>
+            <p style="color: #666; margin: 0;">请求访问您的账户</p>
+        </div>
+        
+        <div class="user-info">
+            <strong>当前用户：</strong>{{ user_id }}
+            <a href="{{ url_for('auth.logout', next=request.full_path) }}" style="margin-left: 10px; color: #667eea;">切换用户</a>
+        </div>
+        
+        <div class="scope-list">
+            <p style="margin: 0 0 10px; font-weight: 600;">该应用请求以下权限：</p>
+            {% if scopes %}
+                {% for scope in scopes %}
+                    <div class="scope-item">{{ scope }}</div>
+                {% endfor %}
+            {% else %}
+                <div class="scope-item">基本访问权限</div>
+            {% endif %}
+        </div>
+        
+        {% if client.description %}
+            <p style="color: #666; font-size: 14px; margin: 20px 0;">
+                {{ client.description }}
+            </p>
+        {% endif %}
+        
+        <form method="POST" action="{{ url_for('oauth.authorize_post') }}">
+            <input type="hidden" name="client_id" value="{{ client.client_id }}">
+            <input type="hidden" name="redirect_uri" value="{{ redirect_uri }}">
+            <input type="hidden" name="scope" value="{{ scope }}">
+            <input type="hidden" name="state" value="{{ state }}">
+            <input type="hidden" name="response_type" value="{{ response_type }}">
+            
+            <div class="action-buttons">
+                <button type="submit" name="action" value="deny" class="btn btn-secondary btn-block">拒绝</button>
+                <button type="submit" name="action" value="allow" class="btn btn-primary btn-block">允许授权</button>
+            </div>
+        </form>
+        
+        <p style="text-align: center; margin-top: 20px; color: #999; font-size: 12px;">
+            请确保您信任该应用。授权后，该应用将可以访问您的数据。
+        </p>
+    </div>
+</body>
+</html>

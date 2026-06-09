@@ -1,0 +1,95 @@
+{% extends 'base.html' %}
+
+{% block title %}首页 - OAuth2.0 授权服务器模拟器{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <h1>OAuth2.0 授权服务器模拟器</h1>
+    <p class="subtitle">用于本地开发和测试的轻量级OAuth2.0授权服务器</p>
+    
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-value">{{ total_clients }}</div>
+            <div class="stat-label">客户端总数</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">{{ active_tokens }}</div>
+            <div class="stat-label">活跃令牌</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">{{ total_logs }}</div>
+            <div class="stat-label">操作日志</div>
+        </div>
+    </div>
+    
+    <div class="quick-actions">
+        <h2>快捷操作</h2>
+        <div class="action-buttons">
+            <a href="{{ url_for('main.new_client') }}" class="btn btn-primary">+ 创建客户端</a>
+            <a href="{{ url_for('admin.tokens') }}" class="btn btn-secondary">管理令牌</a>
+            <a href="{{ url_for('admin.simulated_errors') }}" class="btn btn-warning">模拟错误</a>
+            <a href="{{ url_for('api.export_all') }}" class="btn btn-info">导出数据</a>
+        </div>
+    </div>
+    
+    <div class="recent-clients">
+        <div class="section-header">
+            <h2>最近客户端</h2>
+            <a href="{{ url_for('main.clients') }}" class="btn-link">查看全部 →</a>
+        </div>
+        {% if clients %}
+            <div class="client-list">
+                {% for client in clients[:5] %}
+                    <div class="client-item">
+                        <div class="client-info">
+                            <h3>{{ client.name }}</h3>
+                            <p class="client-id">ID: {{ client.client_id[:20] }}...</p>
+                            <div class="client-tags">
+                                <span class="tag tag-{{ 'success' if client.is_active else 'danger' }}">
+                                    {{ '活跃' if client.is_active else '禁用' }}
+                                </span>
+                                <span class="tag tag-info">{{ client.token_format }}</span>
+                            </div>
+                        </div>
+                        <div class="client-actions">
+                            <a href="{{ url_for('main.client_detail', client_id=client.id) }}" class="btn btn-sm btn-primary">详情</a>
+                            <a href="{{ url_for('main.edit_client', client_id=client.id) }}" class="btn btn-sm btn-secondary">编辑</a>
+                        </div>
+                    </div>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="empty-state">
+                <p>还没有创建客户端</p>
+                <a href="{{ url_for('main.new_client') }}" class="btn btn-primary">创建第一个客户端</a>
+            </div>
+        {% endif %}
+    </div>
+    
+    <div class="endpoints">
+        <h2>OAuth2.0 端点</h2>
+        <div class="endpoint-list">
+            <div class="endpoint-item">
+                <span class="method method-get">GET</span>
+                <code>/oauth/authorize</code>
+                <span class="endpoint-desc">授权端点 - 获取授权码</span>
+            </div>
+            <div class="endpoint-item">
+                <span class="method method-post">POST</span>
+                <code>/oauth/token</code>
+                <span class="endpoint-desc">令牌端点 - 换取访问令牌</span>
+            </div>
+            <div class="endpoint-item">
+                <span class="method method-post">POST</span>
+                <code>/oauth/introspect</code>
+                <span class="endpoint-desc">令牌验证 - 供资源服务器使用</span>
+            </div>
+            <div class="endpoint-item">
+                <span class="method method-post">POST</span>
+                <code>/oauth/revoke</code>
+                <span class="endpoint-desc">令牌撤销 - 撤销访问令牌或刷新令牌</span>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,173 @@
+{% extends 'base.html' %}
+
+{% block title %}API文档 - OAuth2.0{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>API 文档</h1>
+</div>
+
+<div class="card">
+    <h2>OAuth2.0 端点</h2>
+    
+    <div class="endpoint-detail">
+        <h3><span class="method method-get">GET</span> /oauth/authorize</h3>
+        <p>授权端点 - 获取授权码（Authorization Code）</p>
+        <h4>请求参数：</h4>
+        <ul>
+            <li><code>response_type</code> - 必须，值为 <code>code</code></li>
+            <li><code>client_id</code> - 必须，客户端ID</li>
+            <li><code>redirect_uri</code> - 必须，回调地址</li>
+            <li><code>scope</code> - 可选，权限范围，空格分隔</li>
+            <li><code>state</code> - 推荐，用于防止CSRF攻击</li>
+        </ul>
+        <h4>示例：</h4>
+        <div class="code-block">
+            GET /oauth/authorize?response_type=code&client_id=xxx&redirect_uri=http://localhost/callback&scope=read:user%20write:data&state=random123
+        </div>
+    </div>
+    
+    <div class="endpoint-detail">
+        <h3><span class="method method-post">POST</span> /oauth/token</h3>
+        <p>令牌端点 - 换取访问令牌</p>
+        <h4>认证方式：</h4>
+        <p>HTTP Basic Auth (client_id:client_secret)</p>
+        <h4>请求参数（application/x-www-form-urlencoded）：</h4>
+        <ul>
+            <li><code>grant_type</code> - 必须，<code>authorization_code</code> 或 <code>client_credentials</code> 或 <code>refresh_token</code></li>
+            <li><code>code</code> - 授权码模式需要，授权端点返回的code</li>
+            <li><code>redirect_uri</code> - 授权码模式需要，与授权请求一致</li>
+            <li><code>refresh_token</code> - 刷新令牌模式需要</li>
+            <li><code>scope</code> - 客户端凭证模式可选</li>
+        </ul>
+        <h4>示例（客户端凭证模式）：</h4>
+        <div class="code-block">
+            curl -X POST http://localhost:5000/oauth/token \
+              -u "client_id:client_secret" \
+              -d "grant_type=client_credentials" \
+              -d "scope=read:user write:data"
+        </div>
+    </div>
+    
+    <div class="endpoint-detail">
+        <h3><span class="method method-post">POST</span> /oauth/introspect</h3>
+        <p>令牌验证端点 - 供资源服务器验证令牌</p>
+        <h4>认证方式：</h4>
+        <p>HTTP Basic Auth (client_id:client_secret)</p>
+        <h4>请求参数：</h4>
+        <ul>
+            <li><code>token</code> - 必须，要验证的访问令牌</li>
+            <li><code>token_type_hint</code> - 可选，<code>access_token</code> 或 <code>refresh_token</code></li>
+        </ul>
+        <h4>响应示例：</h4>
+        <div class="code-block">{
+    "active": true,
+    "scope": "read:user write:data",
+    "client_id": "xxx",
+    "username": "testuser",
+    "token_type": "Bearer",
+    "exp": 1234567890,
+    "iat": 1234564290
+}</div>
+    </div>
+    
+    <div class="endpoint-detail">
+        <h3><span class="method method-post">POST</span> /oauth/revoke</h3>
+        <p>令牌撤销端点</p>
+        <h4>认证方式：</h4>
+        <p>HTTP Basic Auth (client_id:client_secret)</p>
+        <h4>请求参数：</h4>
+        <ul>
+            <li><code>token</code> - 必须，要撤销的令牌</li>
+        </ul>
+    </div>
+</div>
+
+<div class="card">
+    <h2>管理 API</h2>
+    
+    <div class="endpoint-detail">
+        <h3><span class="method method-get">GET</span> /api/clients</h3>
+        <p>获取所有客户端列表</p>
+    </div>
+    
+    <div class="endpoint-detail">
+        <h3><span class="method method-post">POST</span> /api/clients</h3>
+        <p>创建新客户端</p>
+        <h4>请求体：</h4>
+        <div class="code-block">{
+    "name": "My App",
+    "description": "My test application",
+    "redirect_uris": ["http://localhost/callback"],
+    "grant_types": ["authorization_code", "client_credentials"],
+    "token_format": "jwt",
+    "token_expire_seconds": 3600,
+    "require_consent": true
+}</div>
+    </div>
+    
+    <div class="endpoint-detail">
+        <h3><span class="method method-get">GET</span> /api/clients/{id}</h3>
+        <p>获取客户端详情</p>
+    </div>
+    
+    <div class="endpoint-detail">
+        <h3><span class="method method-put">PUT</span> /api/clients/{id}</h3>
+        <p>更新客户端</p>
+    </div>
+    
+    <div class="endpoint-detail">
+        <h3><span class="method method-delete">DELETE</span> /api/clients/{id}</h3>
+        <p>删除客户端（同时删除相关令牌）</p>
+    </div>
+    
+    <div class="endpoint-detail">
+        <h3><span class="method method-get">GET</span> /api/export/clients</h3>
+        <p>导出客户端配置为JSON</p>
+    </div>
+    
+    <div class="endpoint-detail">
+        <h3><span class="method method-get">GET</span> /api/export/tokens</h3>
+        <p>导出令牌数据为JSON</p>
+    </div>
+    
+    <div class="endpoint-detail">
+        <h3><span class="method method-get">GET</span> /api/export/all</h3>
+        <p>导出所有数据（客户端、令牌、Scope、日志等）为JSON</p>
+    </div>
+</div>
+
+<div class="card">
+    <h2>快速开始</h2>
+    
+    <h3>1. 创建客户端</h3>
+    <p>访问 <a href="{{ url_for('main.new_client') }}">创建客户端</a> 页面，填写表单创建新的OAuth客户端。</p>
+    
+    <h3>2. 测试授权码模式</h3>
+    <ol>
+        <li>构造授权URL，在浏览器中访问</li>
+        <li>输入任意用户名登录（例如：testuser）</li>
+        <li>点击"允许授权"同意授权</li>
+        <li>复制回调URL中的 <code>code</code> 参数</li>
+        <li>使用code调用令牌端点换取访问令牌</li>
+    </ol>
+    
+    <h3>3. 测试客户端凭证模式</h3>
+    <p>直接使用curl或Postman调用令牌端点：</p>
+    <div class="code-block">
+        curl -X POST http://localhost:5000/oauth/token \
+          -u "your_client_id:your_client_secret" \
+          -d "grant_type=client_credentials"
+    </div>
+    
+    <h3>4. 验证令牌</h3>
+    <div class="code-block">
+        curl -X POST http://localhost:5000/oauth/introspect \
+          -u "your_client_id:your_client_secret" \
+          -d "token=your_access_token"
+    </div>
+    
+    <h3>5. 模拟错误场景</h3>
+    <p>访问 <a href="{{ url_for('admin.simulated_errors') }}">模拟错误管理</a> 页面，启用需要测试的错误场景。</p>
+</div>
+{% endblock %}
