@@ -1,5 +1,5 @@
 import json
-from flask import Blueprint, request, jsonify, Response
+from flask import Blueprint, request, jsonify, Response, current_app
 from app import db
 from app.models import Client, Scope, Token, Log, AuthorizationCode, SimulatedError, utcnow
 from app.utils import log_request, validate_token
@@ -181,17 +181,33 @@ def export_clients():
 
 @api_bp.route('/export/tokens', methods=['GET'])
 def export_tokens():
-    tokens = Token.query.all()
-    data = {
-        'exported_at': datetime.utcnow().isoformat(),
-        'tokens': [t.to_dict(include_token=True) for t in tokens]
-    }
-    
-    return Response(
-        json.dumps(data, indent=2),
-        mimetype='application/json',
-        headers={'Content-Disposition': 'attachment; filename=oauth_tokens.json'}
-    )
+    try:
+        tokens = Token.query.all()
+        token_list = []
+        for t in tokens:
+            try:
+                token_list.append(t.to_dict(include_token=True))
+            except Exception as e:
+                current_app.logger.error(f'Error serializing token {t.id}: {e}')
+                continue
+        
+        data = {
+            'exported_at': utcnow().isoformat(),
+            'version': '1.0',
+            'tokens': token_list
+        }
+        
+        return Response(
+            json.dumps(data, indent=2),
+            mimetype='application/json',
+            headers={'Content-Disposition': 'attachment; filename=oauth_tokens.json'}
+        )
+    except Exception as e:
+        current_app.logger.error(f'Error exporting tokens: {e}')
+        return jsonify({
+            'error': 'Export failed',
+            'error_description': str(e)
+        }), 500
 
 @api_bp.route('/export/all', methods=['GET'])
 def export_all():
@@ -239,15 +255,84 @@ def get_token_detail(token_id):
 
 @api_bp.route('/import', methods=['POST'])
 def import_data():
+    data = None
     try:
         if 'file' in request.files:
             file = request.files['file']
-            data = json.load(file)
+            if not file or file.filename == '':
+                return jsonify({
+                    'success': False,
+                    'error': 'No file uploaded',
+                    'error_description': '请选择要导入的JSON文件'
+                }), 400
+            
+            content = file.read()
+            if not content or len(content.strip()) == 0:
+                return jsonify({
+                    'success': False,
+                    'error': 'Empty file',
+                    'error_description': '上传的文件是空的，请检查文件内容'
+                }), 400
+            
+            try:
+                data = json.loads(content.decode('utf-8'))
+            except json.JSONDecodeError as e:
+                return jsonify({
+                    'success': False,
+                    'error': 'Invalid JSON format',
+                    'error_description': f'JSON格式错误: {str(e)}，请检查文件内容是否为有效的JSON格式'
+                }), 400
         else:
             data = request.get_json()
+            if not data:
+                return jsonify({
+                    'success': False,
+                    'error': 'No data provided',
+                    'error_description': '请提供要导入的JSON数据'
+                }), 400
         
-        if not data:
-            return jsonify({'error': 'No data provided'}), 400
+        if not isinstance(data, dict):
+            return jsonify({
+                'success': False,
+                'error': 'Invalid data format',
+                'error_description': '导入的数据必须是JSON对象格式'
+            }), 400
+        
+        has_valid_data = any(key in data for key in ['clients', 'scopes', 'tokens', 'simulated_errors'])
+        if not has_valid_data:
+            return jsonify({
+                'success': False,
+                'error': 'No valid data sections found',
+                'error_description': '未找到有效的数据段，请确保JSON包含clients、scopes、tokens或simulated_errors中的至少一个'
+            }), 400
+        
+        if 'clients' in data and not isinstance(data['clients'], list):
+            return jsonify({
+                'success': False,
+                'error': 'Invalid clients format',
+                'error_description': 'clients字段必须是数组格式'
+            }), 400
+        
+        if 'tokens' in data and not isinstance(data['tokens'], list):
+            return jsonify({
+                'success': False,
+                'error': 'Invalid tokens format',
+                'error_description': 'tokens字段必须是数组格式'
+            }), 400
+        
+        if 'scopes' in data and not isinstance(data['scopes'], list):
+            return jsonify({
+                'success': False,
+                'error': 'Invalid scopes format',
+                'error_description': 'scopes字段必须是数组格式'
+            }), 400
+        
+        if 'simulated_errors' in data and not isinstance(data['simulated_errors'], list):
+            return jsonify({
+                'success': False,
+                'error': 'Invalid simulated_errors format',
+                'error_description': 'simulated_errors字段必须是数组格式'
+            }), 400
         
         results = {
             'clients': {'imported': 0, 'skipped': 0, 'errors': []},

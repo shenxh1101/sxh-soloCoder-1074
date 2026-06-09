@@ -10,10 +10,12 @@ oauth_bp = Blueprint('oauth', __name__)
 
 @oauth_bp.route('/authorize', methods=['GET'])
 def authorize():
-    sim_error = check_simulated_error('invalid_request', 'authorize')
-    if sim_error:
-        log_request('authorize_error', success=False, error_message=sim_error[0]['error_description'])
-        return jsonify(sim_error[0]), sim_error[1]
+    for error_type in ['invalid_request', 'invalid_client', 'unauthorized_client', 'access_denied', 'server_error', 'temporarily_unavailable', 'invalid_scope']:
+        sim_error = check_simulated_error(error_type, 'authorize')
+        if sim_error:
+            error_response, status_code = sim_error
+            log_request('authorize_error', success=False, error_message=error_response['error_description'])
+            return jsonify(error_response), status_code
     
     response_type = request.args.get('response_type')
     client_id = request.args.get('client_id')
@@ -127,10 +129,12 @@ def authorize_post():
 @oauth_bp.route('/token', methods=['POST'])
 @require_basic_auth
 def token():
-    sim_error = check_simulated_error('invalid_client', 'token')
-    if sim_error:
-        log_request('token_error', client_id=request.client.client_id, success=False, error_message=sim_error[0]['error_description'])
-        return jsonify(sim_error[0]), sim_error[1]
+    for error_type in ['server_error', 'temporarily_unavailable', 'invalid_client']:
+        sim_error = check_simulated_error(error_type, 'token')
+        if sim_error:
+            error_response, status_code = sim_error
+            log_request('token_error', client_id=request.client.client_id, success=False, error_message=error_response['error_description'])
+            return jsonify(error_response), status_code
     
     client = request.client
     grant_type = request.form.get('grant_type')
@@ -154,10 +158,12 @@ def token():
                 'error_description': f'Invalid scope: {", ".join(invalid_scopes)}'
             }), 400
         
-        sim_error = check_simulated_error('invalid_grant', 'token')
-        if sim_error:
-            log_request('token_error', client_id=client.client_id, grant_type=grant_type, success=False, error_message=sim_error[0]['error_description'])
-            return jsonify(sim_error[0]), sim_error[1]
+        for error_type in ['invalid_grant', 'invalid_scope', 'server_error', 'temporarily_unavailable']:
+            sim_error = check_simulated_error(error_type, 'token')
+            if sim_error:
+                error_response, status_code = sim_error
+                log_request('token_error', client_id=client.client_id, grant_type=grant_type, success=False, error_message=error_response['error_description'])
+                return jsonify(error_response), status_code
         
         token_data = create_token(client, None, scope, 'client_credentials')
         
@@ -203,10 +209,12 @@ def token():
                 'error_description': 'Authorization code has expired'
             }), 400
         
-        sim_error = check_simulated_error('invalid_grant', 'token')
-        if sim_error:
-            log_request('token_error', client_id=client.client_id, grant_type=grant_type, success=False, error_message=sim_error[0]['error_description'])
-            return jsonify(sim_error[0]), sim_error[1]
+        for error_type in ['invalid_grant', 'server_error', 'temporarily_unavailable']:
+            sim_error = check_simulated_error(error_type, 'token')
+            if sim_error:
+                error_response, status_code = sim_error
+                log_request('token_error', client_id=client.client_id, grant_type=grant_type, success=False, error_message=error_response['error_description'])
+                return jsonify(error_response), status_code
         
         auth_code.is_used = True
         db.session.commit()
@@ -247,6 +255,13 @@ def token():
                 'error_description': 'Invalid or expired refresh token'
             }), 400
         
+        for error_type in ['invalid_grant', 'server_error', 'temporarily_unavailable']:
+            sim_error = check_simulated_error(error_type, 'token')
+            if sim_error:
+                error_response, status_code = sim_error
+                log_request('token_error', client_id=client.client_id, grant_type=grant_type, success=False, error_message=error_response['error_description'])
+                return jsonify(error_response), status_code
+        
         token.is_revoked = True
         db.session.commit()
         
@@ -273,10 +288,12 @@ def token():
 @oauth_bp.route('/introspect', methods=['POST'])
 @require_basic_auth
 def introspect():
-    sim_error = check_simulated_error('invalid_token', 'introspect')
-    if sim_error:
-        log_request('introspect_error', client_id=request.client.client_id, success=False, error_message=sim_error[0]['error_description'])
-        return jsonify({'active': False}), 200
+    for error_type in ['invalid_token', 'server_error', 'temporarily_unavailable', 'invalid_request', 'invalid_client']:
+        sim_error = check_simulated_error(error_type, 'introspect')
+        if sim_error:
+            error_response, status_code = sim_error
+            log_request('introspect_error', client_id=request.client.client_id, success=False, error_message=error_response['error_description'])
+            return jsonify(error_response), status_code
     
     token_str = request.form.get('token')
     token_type_hint = request.form.get('token_type_hint', 'access_token')
@@ -303,6 +320,13 @@ def introspect():
 @oauth_bp.route('/revoke', methods=['POST'])
 @require_basic_auth
 def revoke():
+    for error_type in ['invalid_token', 'server_error', 'temporarily_unavailable', 'invalid_request', 'invalid_client']:
+        sim_error = check_simulated_error(error_type, 'revoke')
+        if sim_error:
+            error_response, status_code = sim_error
+            log_request('revoke_error', client_id=request.client.client_id, success=False, error_message=error_response['error_description'])
+            return jsonify(error_response), status_code
+    
     token_str = request.form.get('token')
     token_type_hint = request.form.get('token_type_hint', 'access_token')
     
